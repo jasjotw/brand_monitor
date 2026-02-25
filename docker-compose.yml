@@ -1,0 +1,53 @@
+name: cognerd
+
+services:
+  # ── Brand Monitor Microservice ──────────────────────────────
+  brand-monitor:
+    build:
+      context: ./brand-monitor-service
+      dockerfile: Dockerfile
+    container_name: brand-monitor-service
+    restart: unless-stopped
+    ports:
+      - "${BRAND_MONITOR_PORT:-4001}:4001"
+    environment:
+      NODE_ENV: production
+      PORT: 4001
+      DATABASE_URL: ${DATABASE_URL}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      WEBAPP_BASE_URL: ${WEBAPP_BASE_URL:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY}
+      AUTUMN_SECRET_KEY: ${AUTUMN_SECRET_KEY}
+      SUPERUSER_EMAILS: ${SUPERUSER_EMAILS:-}
+      USE_MOCK_MODE: ${USE_MOCK_MODE:-false}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - cognerd-net
+
+  # ── Next.js WebApp ──────────────────────────────────────────
+  # Uncomment if you want to run both services together.
+  # webapp:
+  #   build:
+  #     context: ./WebApp
+  #   container_name: cognerd-webapp
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     BRAND_MONITOR_SERVICE_URL: http://brand-monitor:4001
+  #   depends_on:
+  #     brand-monitor:
+  #       condition: service_healthy
+  #   networks:
+  #     - cognerd-net
+
+networks:
+  cognerd-net:
+    driver: bridge

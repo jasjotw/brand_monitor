@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ customer_name }} - Final AEO Report</title>
+    <style>
+        {{ css_content | safe }}
+    </style>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="brand-title">{{ customer_name | upper }}</div>
+        <div class="report-title">Final AEO Audit Report</div>
+        <div class="sub-title">Generated on: {{ generation_date }}</div>
+    </header>
+
+    <div class="container">
+        <!-- =================================== -->
+        <!-- SEO AUDIT SECTION (from seo_audit_extd.py) -->
+        <!-- =================================== -->
+        {% if seo_report %}
+        <div class="card">
+            <h2>SEO Audit Summary</h2>
+            
+            <!-- SEO Metrics -->
+            {% if seo_report.top_metrics %}
+            <div class="top-metrics">
+                {% for label, value in seo_report.top_metrics.items() %}
+                <div class="metric">
+                    <h3>{{ label | replace('_', ' ') | title }}</h3><span>{{ value }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Key Recommendations -->
+            {% if seo_report.key_recommendations %}
+            <div class="card">
+                <h3>Key Recommendations</h3>
+                <ul>
+                {% for action in seo_report.key_recommendations %}
+                    <li>{{ action }}</li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <!-- Dominant Rendering Mode -->
+            <p><strong>Dominant Rendering Mode:</strong> {{ seo_report.dominant_rendering_mode }}</p>
+
+            <!-- Detailed Sections -->
+            {% for section in seo_report.sections %}
+            <div class="card">
+                <h3>{{ section.title }}</h3>
+                <p><strong>Summary:</strong> {{ section.summary }}</p>
+                <p><strong>Meaning:</strong> {{ section.meaning }}</p>
+                {% if section.red_flags %}
+                <p><strong>Red Flags:</strong></p>
+                <ul>
+                    {% for flag in section.red_flags %}
+                    <li class="redflag">⚠️ {{ flag }}</li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="good">✅ No major red flags.</p>
+                {% endif %}
+                <p><strong>Details:</strong> {{ section.details }}</p>
+                
+                {% if section.table_preview %}
+                <h4>Preview Data:</h4>
+                <table>
+                    <thead>
+                        <tr>
+                        {% for key in section.table_preview[0].keys() %}
+                            <th>{{ key }}</th>
+                        {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in section.table_preview %}
+                        <tr>
+                            {% for value in row.values() %}
+                            <td>{{ value }}</td>
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="card"><p>SEO Audit data not available.</p></div>
+        {% endif %}
+
+        <!-- =================================== -->
+        <!-- AEO PROMPT REPORT SECTION -->
+        <!-- =================================== -->
+        {% if aeo_report %}
+        <div class="card">
+            <h2>AEO Prompt Analysis</h2>
+            
+            <!-- Top Metrics -->
+            <div class="top-metrics">
+                <div class="metric">
+                    <h3>Schema Score</h3><span>{{ aeo_report.summary.structuredCoverage | default('N/A') }}%</span>
+                </div>
+                <div class="metric">
+                    <h3>Content Relevance</h3><span>{{ aeo_report.summary.unstructuredCoverage | default('N/A') }}%</span>
+                </div>
+                <div class="metric">
+                    <h3>Optimization Score</h3><span>{{ aeo_report.summary.optimizationOpportunities | default('N/A') }}%</span>
+                </div>
+                <div class="metric">
+                    <h3>Overall AEO Score</h3><span>{{ aeo_report.summary.overallAEOReadiness | default('N/A') }}%</span>
+                </div>
+            </div>
+
+            <!-- Executive Summary -->
+            <div class="card">
+                <h3>Executive Summary</h3>
+                <p><strong>Surface:</strong> {{ aeo_report.executive_summary.surface }}</p>
+                <p><strong>Deeper:</strong> {{ aeo_report.executive_summary.deeper }}</p>
+                <p><strong>Root Causes:</strong> {{ aeo_report.executive_summary.root_causes }}</p>
+            </div>
+
+            <!-- Visuals -->
+            {% if aeo_charts %}
+            <div class="card">
+                <h3>Visuals</h3>
+                <div class="visuals-row">
+                    <div class="chart-card">
+                        {{ aeo_charts.gauge | safe }}
+                        <p class="chart-insight">{{ aeo_insights.gauge }}</p>
+                    </div>
+                    <div class="chart-card">
+                        {{ aeo_charts.radar | safe }}
+                        <p class="chart-insight">{{ aeo_insights.radar }}</p>
+                    </div>
+                    <div class="chart-card">
+                        {{ aeo_charts.bar | safe }}
+                        <p class="chart-insight">{{ aeo_insights.bar }}</p>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Counts & Key Numbers -->
+            <div class="card">
+                <h3>Counts & Key Numbers</h3>
+                <table>
+                    <tr><th>Metric</th><th>Value</th></tr>
+                    <tr><td>Total schema objects audited</td><td>{{ aeo_report.summary.total_schemas | default('N/A') }}</td></tr>
+                    <tr><td>Valid schemas</td><td>{{ aeo_report.summary.schema_counts.valid | default('N/A') }}</td></tr>
+                    <tr><td>Incorrect schemas</td><td>{{ aeo_report.summary.schema_counts.incorrect | default('N/A') }}</td></tr>
+                    <tr><td>Missing schemas</td><td>{{ aeo_report.summary.schema_counts.missing | default('N/A') }}</td></tr>
+                    <tr><td>Total unstructured blocks</td><td>{{ aeo_report.summary.total_unstructured | default('N/A') }}</td></tr>
+                    <tr><td>Optimization suggestions</td><td>{{ aeo_report.summary.optimization_count | default('N/A') }}</td></tr>
+                </table>
+            </div>
+
+            <!-- Raw Findings -->
+            {% if aeo_report.raw_findings %}
+            <div class="card">
+                <h3>Raw Findings</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Type</th>
+                            <th>Summary</th>
+                            <th>Status</th>
+                            <th>Recommendation</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for finding in aeo_report.raw_findings %}
+                        <tr>
+                            <td>{{ finding.type | default('-') }}</td>
+                            <td>{{ finding.textOrSummary | default('') }}</td>
+                            <td>{{ finding.status | default('-') }}</td>
+                            <td>{{ finding.recommendedChanges | default('') }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="card"><p>AEO Prompt Analysis data not available.</p></div>
+        {% endif %}
+
+        <!-- =================================== -->
+        <!-- SCHEMA PROMPT REPORT SECTION -->
+        <!-- =================================== -->
+        {% if schema_report %}
+        <div class="card">
+            <h2>Schema Prompt Analysis</h2>
+
+            <!-- Metrics -->
+            <div class="metric-grid">
+                <div class="metricc">
+                    <h3>Schema Health Score</h3><span>{{ schema_report.metrics.health_score }}/100</span>
+                </div>
+                <div class="metricc">
+                    <h3>Missing Elements</h3><span>{{ schema_report.metrics.missing_count }}</span>
+                </div>
+                <div class="metricc">
+                    <h3>Outdated Elements</h3><span>{{ schema_report.metrics.outdated_count }}</span>
+                </div>
+                <div class="metricc">
+                    <h3>Enhancement Opportunities</h3><span>{{ schema_report.metrics.enhancements_count }}</span>
+                </div>
+                <div class="metricc">
+                    <h3>Potential Visibility Gain</h3><span>{{ schema_report.metrics.potential_gain }}%</span>
+                </div>
+            </div>
+
+            <!-- Sections -->
+            {% for section_name, items in schema_report.sections.items() %}
+            <section class="card">
+                <h2>{{ section_name | replace('_', ' ') | title }}</h2>
+                {% if items %}
+                <ul>
+                    {% for item in items %}
+                    <li><b>{{ item.key }}</b>: {{ item.description }}</li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p>No issues found.</p>
+                {% endif %}
+            </section>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="card"><p>Schema Prompt Analysis data not available.</p></div>
+        {% endif %}
+
+    </div>
+</body>
+</html>

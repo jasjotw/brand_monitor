@@ -1,0 +1,384 @@
+
+        
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Rajdhani:wght@500;600;700&display=swap');
+        :root {
+            /* Fonts */
+            --brand-font: 'Rajdhani', sans-serif;
+            --primary-font: 'Rajdhani', sans-serif;
+            --secondary-font: 'Rajdhani', sans-serif;
+            
+            /* Light Bluish Futuristic Theme */
+            --bg-color: #EBF1F7; /* Very pale cool blue */
+            --card-bg-color: #FFFFFF;
+            --text-color: #334155;
+            --heading-color: #0284C7; /* Tech Blue */
+            --primary-accent: #0284C7;
+            --secondary-accent: #38BDF8; /* Cyan/Sky */
+            --glow-color: rgba(2, 132, 199, 0.25);
+            --border-color: rgba(2, 132, 199, 0.15);
+            --hover-gradient: linear-gradient(90deg, #0f172a 0%, #1877f2 50%, #0f172a 100%);
+        }
+
+        /* ===============================
+        Global Layout
+        =============================== */
+        body {
+            font-family: var(--secondary-font);
+            margin: 0;
+            padding: 0;
+            background: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(56, 189, 248, 0.05) 0%, transparent 20%),
+                radial-gradient(circle at 90% 80%, rgba(2, 132, 199, 0.05) 0%, transparent 20%);
+            color: var(--text-color);
+            font-weight: 500;
+            line-height: 1.6;
+        }
+
+        /* ===============================
+        Header
+        =============================== */
+        header {
+            background: var(--hover-gradient);
+            color: #ffffff;
+            padding: 25px 0;
+            text-align: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 4px 20px rgba(15, 23, 42, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+        header::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, #38BDF8, transparent);
+        }
+        .brand-title {
+            font-family: var(--brand-font);
+            font-size: 42px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            color: #ffffff;
+            text-transform: uppercase;
+            text-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+        }
+        .report-title {
+            font-size: 20px;
+            font-weight: 500;
+            color: rgba(255,255,255,0.9);
+            margin-top: 5px;
+            letter-spacing: 1px;
+        }
+        .sub-title {
+            font-size: 14px;
+            color: rgba(255,255,255,0.6);
+            margin-top: 5px;
+        }
+
+        /* ===============================
+        Container
+        =============================== */
+        .container {
+            max-width: 1250px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        /* ===============================
+        Top Metrics Dashboard
+        =============================== */
+        .top-metrics, .metric-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: flex-start; /* Align left to pack them */
+            margin-bottom: 30px;
+        }
+
+        /* Common Styles for Metric Cards */
+        .metric, .metricc {
+            flex: 1 1 30%; /* Target ~3 items per row */
+            min-width: 250px; /* Minimum width before wrapping */
+            background: var(--card-bg-color);
+            color: var(--heading-color);
+            padding: 20px 25px; /* Increased padding */
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.03);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: space-between;
+            position: relative;
+            cursor: default;
+        }
+
+        /* Icon / Doodle styling */
+        .metric::before, .metricc::before {
+            content: '⚡'; /* Default futuristic icon */
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.2em;
+            opacity: 0.7; /* Increased opacity */
+            color: var(--primary-accent); /* Clearer blue color */
+            text-shadow: 0 0 5px rgba(2, 132, 199, 0.2); /* Subtle glow */
+            transition: all 0.3s ease;
+            z-index: 1;
+        }
+
+        .metric:hover::before, .metricc:hover::before {
+            opacity: 1; /* Fully opaque on hover */
+            color: #ffffff;
+            text-shadow: 0 0 8px rgba(255, 255, 255, 0.5); /* Stronger glow on hover */
+            transform: translateY(-50%) translateX(5px) scale(1.1);
+        }
+
+        /* Specific icons for first few metrics in SEO Audit Summary using nth-child */
+        /* (Assumes order remains consistent) */
+        .card .top-metrics .metric:nth-child(1)::before { content: '🕸️'; opacity: 0.7; text-shadow: 0 0 5px rgba(2, 132, 199, 0.2); } /* Crawl Data */
+        .card .top-metrics .metric:nth-child(2)::before { content: '🗺️'; opacity: 0.7; text-shadow: 0 0 5px rgba(2, 132, 199, 0.2); } /* Sitemap & Crawl */
+        .card .top-metrics .metric:nth-child(3)::before { content: '📝'; opacity: 0.7; text-shadow: 0 0 5px rgba(2, 132, 199, 0.2); } /* Meta Data */
+        .card .top-metrics .metric:nth-child(4)::before { content: '🆎'; opacity: 0.7; text-shadow: 0 0 5px rgba(2, 132, 199, 0.2); } /* Headings */
+        .card .top-metrics .metric:nth-child(5)::before { content: '🔗'; opacity: 0.7; text-shadow: 0 0 5px rgba(2, 132, 199, 0.2); } /* Canonicals */
+        .card .top-metrics .metric:nth-child(6)::before { content: '🤖'; opacity: 0.7; text-shadow: 0 0 5px rgba(2, 132, 199, 0.2); } /* Robots.txt */
+
+        /* Adjust padding for content to not overlap icons */
+        .metric h3, .metricc h3 {
+            margin-left: 25px; /* Push text right to make space for icon */
+            font-family: var(--primary-font);
+            font-size: 1.1em;
+            margin-top: 0;
+            color: var(--primary-accent);
+            font-weight: 600;
+            white-space: nowrap;
+            transition: color 0.3s;
+            z-index: 2;
+        }
+        .metric:hover h3, .metricc:hover h3 {
+            color: #ffffff;
+        }
+        
+        .metric span, .metricc span {
+            font-family: var(--primary-font);
+            font-size: 1.2em;
+            font-weight: 700;
+            color: var(--text-color);
+            margin-left: 10px;
+            white-space: nowrap;
+            transition: color 0.3s;
+            z-index: 2;
+        }
+        .metric:hover span, .metricc:hover span {
+            color: #ffffff;
+        }
+
+        /* Hover Effect: Gradient Background */
+        .metric:hover, .metricc:hover {
+            background: var(--hover-gradient);
+            border-color: transparent;
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 10px 25px rgba(24, 119, 242, 0.4);
+        }
+
+        /* ===============================
+        Cards (Sections)
+        =============================== */
+        .card {
+            background: var(--card-bg-color);
+            border-radius: 12px;
+            padding: 30px;
+            margin: 25px 0;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        
+        /* Apply glow ONLY to nested cards (inner sections) */
+        .card .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 0 20px var(--secondary-accent);
+            border-color: var(--secondary-accent);
+            z-index: 2;
+        }
+
+        .card::after { /* Subtle futuristic corner accent */
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 20px;
+            height: 20px;
+            border-top: 2px solid var(--secondary-accent);
+            border-right: 2px solid var(--secondary-accent);
+            border-top-right-radius: 12px;
+            opacity: 0.5;
+        }
+
+        .card h2 {
+            font-family: var(--brand-font);
+            margin-top: 0;
+            font-size: 1.8em;
+            color: var(--heading-color);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 12px;
+            margin-bottom: 25px;
+            letter-spacing: 0.5px;
+            display: inline-block;
+            width: 100%;
+        }
+        .card h3 {
+            font-family: var(--brand-font);
+            color: var(--text-color);
+            font-size: 1.4em;
+            margin-bottom: 15px;
+            font-weight: 700;
+        }
+
+        /* ===============================
+        Tables
+        =============================== */
+        table {
+            border-collapse: separate;
+            border-spacing: 0;
+            width: 100%;
+            table-layout: fixed; /* Enforce table width to container */
+            margin-top: 20px;
+            font-size: 0.95em;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+        }
+        th {
+            /* One-sided gradient as requested */
+            background: linear-gradient(90deg, #1877f2 0%, #0f172a 100%);
+            color: #ffffff;
+            font-family: var(--primary-font);
+            padding: 15px 20px;
+            text-align: left;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            font-size: 0.9em;
+            font-weight: 600;
+            border-bottom: none;
+        }
+        td {
+            padding: 14px 20px;
+            text-align: left;
+            border-bottom: 1px solid #f1f5f9;
+            color: var(--text-color);
+            transition: background 0.2s;
+            word-break: break-word;
+            overflow-wrap: anywhere; /* Aggressive wrapping for long strings */
+            white-space: normal;
+        }
+        tr:nth-child(even) td { 
+            background: #f8fafc; 
+        }
+        tr:hover td {
+            background: rgba(56, 189, 248, 0.05);
+            color: #0284C7;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* ===============================
+        Flags / Highlights
+        =============================== */
+        .redflag { color: #EF4444; font-weight: bold; }
+        .good { color: #10B981; font-weight: bold; }
+
+        /* ===============================
+        Lists
+        =============================== */
+        .card ul {
+            list-style-type: none;
+            padding-left: 5px;
+        }
+        .card li {
+            margin: 12px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+        .card li::before {
+            content: '>';
+            position: absolute;
+            left: 0;
+            color: var(--primary-accent);
+            font-weight: 800;
+            font-family: monospace;
+        }
+
+        /* ===============================
+        Visuals Section & Charts
+        =============================== */
+        .visuals-row {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            gap: 20px;
+        }
+        .chart-card {
+            flex: 1;
+            min-width: 320px;
+            background-color: var(--card-bg-color);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.03);
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+            overflow: hidden; /* Prevent chart overflow */
+        }
+        .chart-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 0 20px var(--secondary-accent);
+            border-color: var(--secondary-accent);
+        }
+        .chart-insight {
+            color: var(--text-color);
+            text-align: center;
+            margin-top: 15px;
+            font-weight: 500;
+            font-size: 1rem;
+            background: rgba(56, 189, 248, 0.1);
+            padding: 10px;
+            border-radius: 6px;
+            border-left: 3px solid var(--primary-accent);
+        }
+
+        /* Fix for Visuals Text Visibility (SVG/Plotly) */
+        .plotly text {
+            font-family: var(--primary-font) !important;
+            fill: var(--text-color) !important;
+            font-size: 14px !important;
+            font-weight: 600 !important;
+        }
+        .plotly .gtitle {
+            fill: var(--heading-color) !important;
+            font-size: 18px !important;
+        }
+
+        /* ===============================
+        Responsive
+        =============================== */
+        @media (max-width: 768px) {
+            .top-metrics, .visuals-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .metric, .chart-card { 
+                width: 100%;
+                max-width: none;
+            }
+        }
+

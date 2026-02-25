@@ -1,0 +1,36 @@
+# Ignore python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore local environments
+.venv/
+env/
+venv/
+.env
+
+# Ignore git
+.git/
+
+# Ignore tests
+aeo_blog_engine/tests/
+
+# Ignore development/utility scripts
+inspect_db_raw.py
+normalize.py
+test_langfuse_connection.py
+test_qdrant.py
+check_schema.py
+force_migration.py
+relax_column.py
+migrate_db.py
+
+# Ignore local logs
+*.log
+
+# Ignore large binary files
+*.pdf
+
+# Ignore raw documents if they are large (optional, but helps with size)
+# aeo_blog_engine/knowledge/docs/*.pdf

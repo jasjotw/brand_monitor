@@ -1,0 +1,27 @@
+# ─────────────────────────────────────────────────────────────
+# brand-monitor-service/.gitignore
+# ─────────────────────────────────────────────────────────────
+
+# Compiled output
+dist/
+
+# Environment files (never commit real secrets)
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Node modules
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
