@@ -8,12 +8,6 @@
 // the controllers stay thin.
 // ─────────────────────────────────────────────────────────────
 
-// autumn-js uses the non-standard package.json "exports" field
-// which requires moduleResolution: bundler / node16 / nodenext.
-// As a simpler alternative we import the built distribution directly.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { Autumn } = require('autumn-js') as { Autumn: new (opts: { apiKey: string }) => any };
-
 import {
     InsufficientCreditsError,
     ExternalServiceError,
@@ -26,11 +20,13 @@ import {
 // Lazy singleton — constructed on first use so that dotenv.config()
 // in server.ts has already run before we read AUTUMN_SECRET_KEY.
 let _autumn: any = null;
-function getAutumnClient() {
+async function getAutumnClient() {
     if (!_autumn) {
         const key = process.env.AUTUMN_SECRET_KEY;
         if (!key) throw new Error('AUTUMN_SECRET_KEY is not set in environment');
-        _autumn = new Autumn({ apiKey: key });
+        // Use eval to dynamically load the ESM autumn-js package natively to avoid chalk require() crash
+        const autumnMod = await eval("import('autumn-js')");
+        _autumn = new autumnMod.Autumn({ apiKey: key });
     }
     return _autumn;
 }
@@ -68,7 +64,8 @@ export async function checkCredits(
 
     try {
         console.log(`${logTag} Checking access — Customer ID: ${customerId}`);
-        const access = await getAutumnClient().check({
+        const client = await getAutumnClient();
+        const access = await client.check({
             customer_id: customerId,
             feature_id: FEATURE_ID_MESSAGES,
         });
@@ -113,7 +110,8 @@ export async function trackCredits(
 
     try {
         console.log(`${logTag} Recording usage — Customer ID: ${customerId}, Count: ${count}`);
-        await getAutumnClient().track({
+        const client = await getAutumnClient();
+        await client.track({
             customer_id: customerId,
             feature_id: FEATURE_ID_MESSAGES,
             count,
@@ -134,7 +132,8 @@ export async function getRemainingCredits(
     logTag = '[Credit]',
 ): Promise<number> {
     try {
-        const usage = await getAutumnClient().check({
+        const client = await getAutumnClient();
+        const usage = await client.check({
             customer_id: customerId,
             feature_id: FEATURE_ID_MESSAGES,
         });
