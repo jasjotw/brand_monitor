@@ -60,6 +60,10 @@ function brandMentionCount(signal: ParsedSignalLike): number {
         : 0;
 }
 
+function isBrandPlatformSignal(signal: ParsedSignalLike): boolean {
+    return brandMentionCount(signal) > 0;
+}
+
 function clampPercent(value: number): number {
     return Math.max(0, Math.min(100, value));
 }
@@ -297,7 +301,7 @@ export function buildVisibilityAnalytics(runs: RunSnapshot[]): AnyObj {
     const previousSignals = runs[1] ? parsedSignalsFromRun(runs[1]) : [];
     const providerMap = new Map<string, { explicit: number; implicit: number; citations: number; sentimentSum: number; sentimentCount: number }>();
     latestSignals.forEach((s) => {
-        if (!isBrandMentioned(s)) return;
+        if (!isBrandPlatformSignal(s)) return;
         const provider = s.llmProvider || 'Unknown';
         const entry = providerMap.get(provider) || { explicit: 0, implicit: 0, citations: 0, sentimentSum: 0, sentimentCount: 0 };
         entry.explicit += toNumber(s.explicitCount);
@@ -310,7 +314,7 @@ export function buildVisibilityAnalytics(runs: RunSnapshot[]): AnyObj {
 
     const previousProviderMentions = new Map<string, number>();
     previousSignals.forEach((s) => {
-        if (!isBrandMentioned(s)) return;
+        if (!isBrandPlatformSignal(s)) return;
         const provider = s.llmProvider || 'Unknown';
         const existing = previousProviderMentions.get(provider) || 0;
         previousProviderMentions.set(provider, existing + brandMentionCount(s));
@@ -346,7 +350,7 @@ export function buildVisibilityAnalytics(runs: RunSnapshot[]): AnyObj {
 
     const recentMentions = latestSignals
         .slice()
-        .filter((s) => isBrandMentioned(s))
+        .filter((s) => isBrandPlatformSignal(s))
         .sort((a, b) => {
             const ta = new Date(a.timestamp || latest.createdAt).getTime();
             const tb = new Date(b.timestamp || latest.createdAt).getTime();
