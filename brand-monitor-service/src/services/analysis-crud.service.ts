@@ -65,6 +65,17 @@ export interface CreateAnalysisInput {
     competitors?: unknown;
     prompts?: unknown;
     creditsUsed?: number;
+    brandId?: string;
+}
+
+export interface UpdateAnalysisInput {
+    analysisId: string;
+    userId: string;
+    analysisData?: unknown;
+    competitors?: unknown;
+    prompts?: unknown;
+    companyName?: string;
+    industry?: string;
 }
 
 /**
@@ -88,9 +99,10 @@ export async function createAnalysis(input: CreateAnalysisInput): Promise<BrandA
     const rows = await executeWithRetry(() =>
         db
             .insert(brandAnalyses)
-            .values({
-                userId: input.userId,
-                url: input.url,
+                .values({
+                    userId: input.userId,
+                    brandId: input.brandId,
+                    url: input.url,
                 companyName: input.companyName,
                 industry: input.industry,
                 analysisData: input.analysisData,
@@ -101,6 +113,35 @@ export async function createAnalysis(input: CreateAnalysisInput): Promise<BrandA
             .returning(),
     ) as BrandAnalysisRow[];
 
+    return rows[0];
+}
+
+/**
+ * Updates an existing analysis owned by userId and returns the updated row.
+ * Throws NotFoundError if the row doesn't exist or doesn't belong to the user.
+ */
+export async function updateAnalysis(input: UpdateAnalysisInput): Promise<BrandAnalysisRow> {
+    const rows = await executeWithRetry(() =>
+        db
+            .update(brandAnalyses)
+            .set({
+                analysisData: input.analysisData,
+                competitors: input.competitors,
+                prompts: input.prompts,
+                companyName: input.companyName,
+                industry: input.industry,
+                updatedAt: new Date(),
+            })
+            .where(
+                and(
+                    eq(brandAnalyses.id, input.analysisId),
+                    eq(brandAnalyses.userId, input.userId),
+                ),
+            )
+            .returning(),
+    ) as BrandAnalysisRow[];
+
+    if (rows.length === 0) throw new NotFoundError('Analysis not found');
     return rows[0];
 }
 

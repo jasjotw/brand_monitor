@@ -169,6 +169,12 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
 // ── Convenience helper for controller try/catch ───────────────
 
 export function handleApiError(error: unknown, res: Response): void {
+    if (error instanceof Error) {
+        console.error('[API Error][handleApiError]', error.message, error.stack);
+    } else {
+        console.error('[API Error][handleApiError]', error);
+    }
+
     if (error instanceof ApiError) {
         res.status(error.statusCode).json(buildErrorBody(error));
         return;

@@ -12,6 +12,11 @@ import cors from 'cors';
 import scrapeRoutes from './routes/scrape.routes';
 import analyzeRoutes from './routes/analyze.routes';
 import analysesRoutes from './routes/analyses.routes';
+import authRoutes from './modules/auth/auth.routes';
+import brandProfileRoutes from './routes/brand-profile.routes';
+import audienceRoutes from './routes/audience.routes';
+import analyticsRoutes from './routes/analytics.routes';
+import backlinksRoutes from './routes/backlinks.routes';
 
 // Error handler (must be registered LAST)
 import { errorHandler } from './utils/errors';
@@ -39,7 +44,7 @@ export function createApp(): Application {
                 callback(new Error(`Origin "${origin}" is not allowed by CORS`));
             },
             credentials: true, // allow cookies to be forwarded (better-auth sessions)
-            methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+            methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
             allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
             exposedHeaders: ['Set-Cookie'],
         }),
@@ -60,9 +65,15 @@ export function createApp(): Application {
     });
 
     // ── API Routes ─────────────────────────────────────────────
+    app.use('/api/auth', authRoutes);
+    app.use('/auth', authRoutes);
+    app.use('/api/brand-monitor/brand-profile', brandProfileRoutes);
+    app.use('/api/brand-monitor/audience', audienceRoutes);
     app.use('/api/brand-monitor/scrape', scrapeRoutes);
     app.use('/api/brand-monitor/analyze', analyzeRoutes);
     app.use('/api/brand-monitor/analyses', analysesRoutes);
+    app.use('/api/brand-monitor/analytics', analyticsRoutes);
+    app.use('/api/brand-monitor/backlinks', backlinksRoutes);
 
     // ── 404 fallback ───────────────────────────────────────────
     app.use((_req: Request, res: Response) => {

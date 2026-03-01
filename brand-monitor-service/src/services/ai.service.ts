@@ -24,6 +24,7 @@ import {
     ProgressCallback,
     CompetitorFoundData,
     Persona,
+    IdealCustomerProfile,
 } from '../types';
 import {
     getConfiguredProviders,
@@ -40,12 +41,25 @@ import {
 import { validateCompetitorUrl } from '../utils/url.utils';
 import { calculateSentimentScore, determineSentiment } from '../utils/sentiment.utils';
 import {
-    COMPETITOR_IDENTIFICATION_PROMPT,
     PROMPT_GENERATION_SYSTEM_PROMPT,
     PERSONA_GENERATION_SYSTEM_PROMPT,
 } from '../prompts';
 
 const MAX_GENERATED_PROMPTS = 20;
+
+function normalizePromptCategory(value: unknown): BrandPrompt['category'] {
+    const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    const canonical = raw.replace(/\s+/g, '_');
+    if (canonical === 'organic_discovery') return 'organic_discovery';
+    if (canonical === 'category_authority') return 'category_authority';
+    if (canonical === 'competitive_evaluation') return 'competitive_evaluation';
+    if (canonical === 'replacement_intent') return 'replacement_intent';
+    if (canonical === 'conversational_recall') return 'conversational_recall';
+    if (canonical === 'comparison') return 'comparison';
+    if (canonical === 'alternatives') return 'alternatives';
+    if (canonical === 'recommendations') return 'recommendations';
+    return 'ranking';
+}
 
 // ── Zod Schemas ───────────────────────────────────────────────
 
@@ -67,25 +81,6 @@ const RankingSchema = z.object({
     }),
 });
 
-const CompetitorSchema = z.object({
-    competitors: z.array(
-        z.object({
-            name: z.string(),
-            description: z.string(),
-            isDirectCompetitor: z.boolean(),
-            marketOverlap: z.enum(['high', 'medium', 'low']),
-            businessModel: z
-                .string()
-                .describe('e.g., DTC brand, SaaS, API service, marketplace'),
-            competitorType: z
-                .enum(['direct', 'indirect', 'retailer', 'platform'])
-                .describe(
-                    'direct = same products, indirect = adjacent products, retailer = sells products, platform = aggregates',
-                ),
-        }),
-    ),
-});
-
 const CompetitorUrlSchema = z.object({
     competitors: z.array(
         z.object({
@@ -95,6 +90,194 @@ const CompetitorUrlSchema = z.object({
     ),
 });
 
+const GeoCompetitorSchema = z.object({
+    competitors: z.array(
+        z.object({
+            name: z.string(),
+            url: z.string(),
+        }),
+    ),
+});
+
+const ICPSchema = z.object({
+    summary: z.string(),
+    industries: z.array(z.string()),
+    companySize: z.string(),
+    annualRevenueRange: z.string(),
+    geographies: z.array(z.string()),
+    budgetRange: z.string(),
+    buyingCommittee: z.array(z.string()),
+    painPoints: z.array(z.string()),
+    successCriteria: z.array(z.string()),
+});
+
+const RichICPSchema = z.object({
+    icp_summary: z.string(),
+    firmographics: z.record(z.unknown()),
+    buyer_committee: z.record(z.unknown()),
+    pain_points: z.array(z.string()),
+    jtbd: z.object({
+        functional: z.array(z.string()),
+        emotional: z.array(z.string()),
+        social: z.array(z.string()),
+    }),
+    ai_search_behavior: z.record(z.unknown()),
+    trigger_events: z.array(z.string()),
+    buying_criteria: z.object({
+        must_have: z.array(z.string()),
+        nice_to_have: z.array(z.string()),
+        deal_breakers: z.array(z.string()),
+    }),
+    objections: z.array(z.string()),
+    disqualification_criteria: z.array(z.string()),
+    intent_signals: z.object({
+        content: z.array(z.string()),
+        behavioral: z.array(z.string()),
+        technographic: z.array(z.string()),
+        geo_relevant: z.array(z.string()),
+    }),
+    messaging_angles: z.object({
+        value_props: z.array(z.string()),
+        proof_points: z.array(z.string()),
+    }),
+    priority_segments: z.array(z.union([z.record(z.unknown()), z.string()])),
+});
+
+const BaseQuerySchema = z.object({
+    query: z.string(),
+});
+
+function getLocationLabel(location?: string): string {
+    const raw = (location ?? '').trim();
+    if (!raw) return 'Global';
+    const first = raw.split(',').map((part) => part.trim()).find(Boolean) || raw;
+    return first;
+}
+
+function ensureLocationBasedPersonaRole(
+    rawRole: unknown,
+    rawName: unknown,
+    company: Company,
+    idx: number,
+): string {
+    const roleFromModel = typeof rawRole === 'string' ? rawRole.trim() : '';
+    const nameFromModel = typeof rawName === 'string' ? rawName.trim() : '';
+    let role = roleFromModel || nameFromModel;
+
+    const locationLabel = getLocationLabel(company.location);
+    const defaultRoleSeeds = ['Growth Marketer', 'Operations Lead', 'Product Evaluator'];
+    const defaultSeed = defaultRoleSeeds[idx % defaultRoleSeeds.length];
+
+    if (!role || /^unknown role$/i.test(role)) {
+        role = `The ${locationLabel} ${defaultSeed}`;
+    }
+
+    if (locationLabel.toLowerCase() !== 'global') {
+        const hasLocation = role.toLowerCase().includes(locationLabel.toLowerCase());
+        if (!hasLocation) {
+            role = `The ${locationLabel} ${role.replace(/^the\s+/i, '')}`;
+        }
+    }
+
+    return role;
+}
+
+export interface GeneratedCompetitor {
+    name: string;
+    url: string;
+}
+
+function dedupeGeneratedCompetitors(
+    competitors: GeneratedCompetitor[],
+): GeneratedCompetitor[] {
+    const seen = new Set<string>();
+    return competitors.filter((c) => {
+        const key = c.name.trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+export async function identifyCompetitorDetails(
+    company: Company,
+): Promise<GeneratedCompetitor[]> {
+    const preferred = getPreferredProvider('openai');
+    if (!preferred) throw new Error('No AI providers configured and enabled');
+    const { model } = preferred;
+
+    const companyContext = [
+        `Company: ${company.name}`,
+        company.industry ? `Industry: ${company.industry}` : '',
+        company.description ? `Description: ${company.description}` : '',
+        company.location ? `Location: ${company.location}` : '',
+        company.scrapedData?.keywords?.length
+            ? `Keywords: ${company.scrapedData.keywords.join(', ')}`
+            : '',
+        company.scrapedData?.mainProducts?.length
+            ? `Main products: ${company.scrapedData.mainProducts.join(', ')}`
+            : '',
+    ]
+        .filter(Boolean)
+        .join('\n');
+
+    const parseGenerated = (object: z.infer<typeof GeoCompetitorSchema>): GeneratedCompetitor[] =>
+        dedupeGeneratedCompetitors(
+            object.competitors
+                .map((entry) => {
+                    const name = entry.name.trim();
+                    const url = validateCompetitorUrl(entry.url);
+                    if (!name || !url) return null;
+                    return { name, url } as GeneratedCompetitor;
+                })
+                .filter((entry): entry is GeneratedCompetitor => Boolean(entry)),
+        );
+
+    const localPrompt = `Identify exactly 5 direct LOCAL competitors.
+
+${companyContext}
+
+Rules:
+- Prefer same city/region/country as the company location.
+- If city-level is limited, use same country.
+- Must be direct competitors with similar offering and customer segment.
+- Return only valid JSON:
+{"competitors":[{"name":"Competitor Name","url":"domain.com"}]}`;
+
+    const localObject = await generateObject({
+        model,
+        schema: GeoCompetitorSchema,
+        prompt: localPrompt,
+        temperature: 0.2,
+    });
+    const local = parseGenerated(localObject.object).slice(0, 5);
+
+    const localNames = local.map((c) => c.name).join(', ');
+    const globalPrompt = `Identify exactly 5 direct GLOBAL competitors outside the company's location.
+
+${companyContext}
+Exclude these names: ${localNames || 'none'}
+
+Rules:
+- Must be from outside the company location/region.
+- Must be direct competitors with similar offering and customer segment.
+- Do not repeat excluded names.
+- Return only valid JSON:
+{"competitors":[{"name":"Competitor Name","url":"domain.com"}]}`;
+
+    const globalObject = await generateObject({
+        model,
+        schema: GeoCompetitorSchema,
+        prompt: globalPrompt,
+        temperature: 0.2,
+    });
+    const global = parseGenerated(globalObject.object)
+        .filter((c) => !local.some((l) => l.name.toLowerCase() === c.name.toLowerCase()))
+        .slice(0, 5);
+
+    return [...local, ...global].slice(0, 10);
+}
+
 // ── Competitor Identification ─────────────────────────────────
 
 export async function identifyCompetitors(
@@ -102,43 +285,19 @@ export async function identifyCompetitors(
     progressCallback?: ProgressCallback,
 ): Promise<string[]> {
     try {
-        // Prefer Ollama when OLLAMA_ENABLED=true, otherwise use openai
-        const preferred = getPreferredProvider('openai');
-        if (!preferred) throw new Error('No AI providers configured and enabled');
-        const { provider, model } = preferred;
+        const detailed = await identifyCompetitorDetails(company);
+        let competitors = detailed.map((c) => c.name);
 
-        const prompt = COMPETITOR_IDENTIFICATION_PROMPT({
-            companyName: company.name,
-            industry: company.industry || '',
-            description: company.description || '',
-            keywords: company.scrapedData?.keywords?.join(', '),
-            knownCompetitors: company.scrapedData?.competitors?.join(', '),
-            location: company.location,
-        });
-
-        const { object } = await generateObject({ model, schema: CompetitorSchema, prompt, temperature: 0.3 });
-
-        const isRetailOrPlatform =
-            company.industry?.toLowerCase().includes('marketplace') ||
-            company.industry?.toLowerCase().includes('platform') ||
-            company.industry?.toLowerCase().includes('retailer');
-
-        const competitors = object.competitors
-            .filter((c) => {
-                if (c.isDirectCompetitor && c.marketOverlap === 'high') return true;
-                if (!isRetailOrPlatform && (c.competitorType === 'retailer' || c.competitorType === 'platform')) return false;
-                return c.competitorType === 'direct' || (c.competitorType === 'indirect' && c.marketOverlap === 'high');
-            })
-            .map((c) => c.name)
-            .slice(0, 9);
-
-        // Add competitors found during scraping
         if (company.scrapedData?.competitors) {
             company.scrapedData.competitors.forEach((comp) => {
                 const name = typeof comp === 'string' ? comp : (comp as any).name;
-                if (!competitors.includes(name)) competitors.push(name);
+                if (name && !competitors.some((c) => c.toLowerCase() === String(name).toLowerCase())) {
+                    competitors.push(String(name));
+                }
             });
         }
+
+        competitors = competitors.slice(0, 10);
 
         if (progressCallback) {
             for (let i = 0; i < competitors.length; i++) {
@@ -252,11 +411,13 @@ export async function generatePersonasForBrand(company: Company): Promise<Person
         if (object && Array.isArray(object.personas)) {
             return object.personas.map((p: any, idx: number) => ({
                 id: `persona-${idx}`,
-                role: p.role ?? 'Unknown Role',
+                role: ensureLocationBasedPersonaRole(p?.role, p?.name, company, idx),
                 description: p.description ?? '',
                 painPoints: Array.isArray(p.painPoints) ? p.painPoints : [],
                 goals: Array.isArray(p.goals) ? p.goals : [],
-                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(p.role ?? `persona-${idx}`)}`,
+                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(
+                    ensureLocationBasedPersonaRole(p?.role, p?.name, company, idx),
+                )}`,
             }));
         }
     } catch (err) {
@@ -265,12 +426,304 @@ export async function generatePersonasForBrand(company: Company): Promise<Person
     return [];
 }
 
+export async function generateIcpForBrand(
+    company: Company,
+    additionalInputs?: Record<string, string>,
+): Promise<IdealCustomerProfile> {
+    const preferred = getPreferredProvider('google');
+    if (!preferred) throw new Error('No AI providers configured and enabled');
+    const { model } = preferred;
+
+    const extras = additionalInputs ?? {};
+    const productSummary =
+        extras.product_summary ??
+        company.scrapedData?.description ??
+        company.description ??
+        '';
+    const customerSignals = extras.customer_signals ?? '';
+    const usp = extras.usp ?? '';
+    const competitors =
+        extras.competitors ??
+        company.scrapedData?.competitors?.join(', ') ??
+        '';
+    const geo = extras.geo ?? company.location ?? '';
+    const pricePoint = extras.price_point ?? '';
+    const salesMotion = extras.sales_motion ?? '';
+
+    const prompt = `You are a senior B2B GTM strategist and AI-era buyer behavior analyst.
+
+Create an Ideal Customer Profile (ICP) for the company below.
+
+This ICP will be used to:
+
+Simulate AI search queries
+
+Model decision-making behavior
+
+Generate GEO/AEO monitoring prompts
+
+Identify competitive displacement patterns
+
+Company context:
+
+Brand name: ${company.name}
+
+Website: ${company.url}
+
+Industry: ${company.industry ?? ''}
+
+Product/Service summary: ${productSummary}
+
+Current customer signals (if any): ${customerSignals}
+
+Positioning/USP: ${usp}
+
+Competitors: ${competitors}
+
+Geography focus: ${geo}
+
+Price point: ${pricePoint}
+
+Sales motion: ${salesMotion}
+
+Output requirements:
+
+ICP Summary (2-4 lines, specific and hypothesis-driven)
+
+Firmographic Profile
+
+Company size (employee range)
+
+Revenue range
+
+Industry/sub-industries
+
+Geography
+
+Company maturity stage
+
+Budget ownership likelihood
+
+Buyer Committee
+
+Economic buyer
+
+Champion/user buyer
+
+Technical evaluator
+
+Blocking stakeholders
+
+Decision complexity (Low / Medium / High)
+
+Ranked Pain Points (Top 10, in priority order)
+
+Jobs-to-be-Done
+
+Functional
+
+Emotional
+
+Social
+
+AI Search & Research Behavior (CRITICAL)
+
+How they phrase AI queries (short, analytical, comparison-heavy, conversational, etc.)
+
+Likelihood to ask vs comparisons
+
+Likelihood to request citations
+
+Budget sensitivity in search phrasing
+
+Urgency bias in queries
+
+Trigger Events (what makes them buy now)
+
+Buying Criteria
+
+Must-have
+
+Nice-to-have
+
+Deal-breakers
+
+Objections & Risk Concerns
+
+Disqualification Criteria (who NOT to target)
+
+Intent Signals to Prioritize
+
+Content signals
+
+Behavioral signals
+
+Technographic signals
+
+GEO-relevant signals (AI monitoring interest, competitor comparison searches, etc.)
+
+Messaging Angles
+
+5 differentiated value propositions
+
+5 proof points required to win
+
+Priority Segments
+For each:
+
+Segment name
+
+Why now
+
+Estimated win probability (Low/Med/High)
+
+Recommended acquisition channel
+
+Expected sales cycle length
+
+Constraints:
+
+Be specific and non-generic.
+
+Prefer testable hypotheses.
+
+If data is missing, state assumptions.
+
+Keep concise but actionable.
+
+Align ICP behavior with price point and sales motion.
+
+Reflect competitive dynamics vs ${competitors}.
+
+Return valid JSON:
+
+{
+"icp_summary": "",
+"firmographics": {},
+"buyer_committee": {},
+"pain_points": [],
+"jtbd": {"functional": [], "emotional": [], "social": []},
+"ai_search_behavior": {},
+"trigger_events": [],
+"buying_criteria": {"must_have": [], "nice_to_have": [], "deal_breakers": []},
+"objections": [],
+"disqualification_criteria": [],
+"intent_signals": {"content": [], "behavioral": [], "technographic": [], "geo_relevant": []},
+"messaging_angles": {"value_props": [], "proof_points": []},
+"priority_segments": []
+}`;
+
+    const { object } = await generateObject({
+        model,
+        schema: RichICPSchema,
+        prompt,
+        temperature: 0.3,
+    });
+
+    const firmographics = object.firmographics ?? {};
+    const buyerCommittee = object.buyer_committee ?? {};
+    const getString = (value: unknown): string =>
+        typeof value === 'string' ? value : '';
+    const getStringArray = (value: unknown): string[] =>
+        Array.isArray(value)
+            ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            : [];
+
+    const icp: IdealCustomerProfile = {
+        summary: object.icp_summary,
+        industries:
+            getStringArray((firmographics as Record<string, unknown>).industries).length > 0
+                ? getStringArray((firmographics as Record<string, unknown>).industries)
+                : getString((firmographics as Record<string, unknown>).industry_sub_industries)
+                    .split(',')
+                    .map((v) => v.trim())
+                    .filter(Boolean),
+        companySize:
+            getString((firmographics as Record<string, unknown>).company_size) ||
+            getString((firmographics as Record<string, unknown>).employee_range),
+        annualRevenueRange: getString((firmographics as Record<string, unknown>).revenue_range),
+        geographies:
+            getStringArray((firmographics as Record<string, unknown>).geography).length > 0
+                ? getStringArray((firmographics as Record<string, unknown>).geography)
+                : getString((firmographics as Record<string, unknown>).geography)
+                    .split(',')
+                    .map((v) => v.trim())
+                    .filter(Boolean),
+        budgetRange: getString((firmographics as Record<string, unknown>).budget_ownership_likelihood),
+        buyingCommittee: [
+            ...getStringArray((buyerCommittee as Record<string, unknown>).economic_buyer),
+            ...getStringArray((buyerCommittee as Record<string, unknown>).champion_user_buyer),
+            ...getStringArray((buyerCommittee as Record<string, unknown>).technical_evaluator),
+            ...getStringArray((buyerCommittee as Record<string, unknown>).blocking_stakeholders),
+        ].filter(Boolean),
+        painPoints: object.pain_points,
+        successCriteria: object.buying_criteria.must_have,
+        icp_summary: object.icp_summary,
+        firmographics: object.firmographics,
+        buyer_committee: object.buyer_committee,
+        pain_points: object.pain_points,
+        jtbd: object.jtbd,
+        ai_search_behavior: object.ai_search_behavior,
+        trigger_events: object.trigger_events,
+        buying_criteria: object.buying_criteria,
+        objections: object.objections,
+        disqualification_criteria: object.disqualification_criteria,
+        intent_signals: object.intent_signals,
+        messaging_angles: object.messaging_angles,
+        priority_segments: object.priority_segments,
+    };
+
+    return icp;
+}
+
+export async function generateBaseQueryForBrand(input: {
+    brandName: string;
+    industry?: string;
+    location?: string;
+    audience?: string;
+    usp?: string[];
+    mainProducts?: string[];
+}): Promise<string> {
+    const preferred = getPreferredProvider('google');
+    if (!preferred) throw new Error('No AI providers configured and enabled');
+    const { model } = preferred;
+
+    const prompt = `Create one high-intent base search query for brand visibility analysis.
+
+Brand: ${input.brandName}
+Industry: ${input.industry ?? ''}
+Location: ${input.location ?? ''}
+Target Audience: ${input.audience ?? ''}
+USP: ${(input.usp ?? []).join(', ')}
+Products/Services: ${(input.mainProducts ?? []).join(', ')}
+
+Rules:
+- Return exactly one query string in JSON.
+- Make it location-aware when location is available.
+- Use industry + audience + USP + product context.
+- Query should be about finding options/solutions in this category.
+- Do NOT use the exact brand name in the query.
+- It can reference similar products/companies in the category, but not the same company.
+- Keep it concise and realistic (8-16 words).
+`;
+
+    const { object } = await generateObject({
+        model,
+        schema: BaseQuerySchema,
+        prompt,
+        temperature: 0.3,
+    });
+
+    return object.query.trim();
+}
+
 // ── Prompt Generation ─────────────────────────────────────────
 
 export async function generatePromptsForCompany(
     company: Company,
     competitors: string[],
     customPersonas?: Persona[],
+    icp?: IdealCustomerProfile | null,
 ): Promise<BrandPrompt[]> {
     const prompts: BrandPrompt[] = [];
     let promptId = 0;
@@ -302,6 +755,7 @@ export async function generatePromptsForCompany(
         description,
         competitors: competitors.join(', '),
         personas: personas.length > 0 ? personas : undefined,
+        icp: icp ?? undefined,
     });
 
     const { text } = await generateText({
@@ -334,12 +788,12 @@ export async function generatePromptsForCompany(
     if (promptsData.length > 0) {
         const mapped = promptsData.map((p) => {
             let promptText = 'Unknown prompt';
-            let category = 'ranking';
+            let category: BrandPrompt['category'] = 'ranking';
             if (typeof p === 'string') {
                 promptText = p;
             } else if (typeof p === 'object' && p !== null) {
                 promptText = p.prompt || p.text || p.query || p.question || 'Unknown prompt';
-                category = p.category || 'ranking';
+                category = normalizePromptCategory(p.category);
             }
             return {
                 id: (p?.id) || (++promptId).toString(),
@@ -411,13 +865,54 @@ export async function analyzePromptWithProvider(
         return null;
     }
 
-    const systemPrompt = `You are an AI assistant analyzing brand visibility and rankings.
-When responding to prompts about tools, platforms, or services:
-1. Provide rankings with specific positions (1st, 2nd, etc.)
-2. Focus on the companies mentioned in the prompt
-3. Be objective and factual
-4. Explain briefly why each tool is ranked where it is
-5. If you don't have enough information about a specific company, you can mention that`;
+    const systemPrompt = `You are an objective AI analyst evaluating tools, platforms, or service providers relevant to the query below.
+
+Follow these rules:
+
+If tools, platforms, or providers are relevant:
+
+Provide up to 5 ranked recommendations.
+
+Rank them strictly in order of suitability.
+
+Do NOT automatically prioritize companies mentioned in the question.
+
+Only include companies that are genuinely relevant.
+
+If a mentioned company is weak or not competitive, you may rank it lower or exclude it.
+
+If the query is informational:
+
+Provide a structured practical summary.
+
+Then include recommended tools only if clearly relevant.
+
+Be factual and neutral.
+
+No marketing tone.
+
+No fabricated data.
+
+If insufficient information exists, state that clearly.
+
+Respond strictly in JSON format:
+
+{
+"summary": "Structured explanation of the answer",
+"recommended_solutions": [
+{
+"name": "Company Name",
+"ranking_position": 1,
+"reason": "Why it is ranked here",
+"best_for": "Type of business",
+"sentiment": "positive | neutral | negative"
+}
+],
+"citations": [
+"Reference or source text if applicable"
+],
+"notes": "If no dominant providers exist, clearly state it here."
+}`;
 
     try {
         const maxAttempts = normalizedProvider === 'google' ? 3 : 1;
@@ -427,7 +922,7 @@ When responding to prompts about tools, platforms, or services:
                 const result = await generateText({
                     model,
                     system: systemPrompt,
-                    prompt,
+                    prompt: `Now answer this query:\n\n${prompt}`,
                     temperature: normalizedProvider === 'google' ? 0.8 : 0.7,
                     maxTokens: normalizedProvider === 'google' ? 1000 : 800,
                 });

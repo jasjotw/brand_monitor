@@ -71,6 +71,7 @@ export async function createAnalysisHandler(req: Request, res: Response): Promis
             competitors?: unknown;
             prompts?: unknown;
             creditsUsed?: number;
+            brandId?: string;
         };
 
         // Match original validation: url AND analysisData are required
@@ -90,6 +91,7 @@ export async function createAnalysisHandler(req: Request, res: Response): Promis
             competitors: body.competitors,
             prompts: body.prompts,
             creditsUsed: body.creditsUsed ?? 10,
+            brandId: body.brandId,
         };
 
         const analysis = await createAnalysis(input);

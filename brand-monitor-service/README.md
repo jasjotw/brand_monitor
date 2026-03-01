@@ -166,6 +166,7 @@ docker-compose up --build brand-monitor
 | `BETTER_AUTH_SECRET` | **yes** | — | Must match WebApp exactly |
 | `WEBAPP_BASE_URL` | no | `http://localhost:3000` | CORS allowed origin |
 | `CORS_ORIGINS` | no | same as `WEBAPP_BASE_URL` | Comma-separated extra origins |
+| `JWT_SECRET` | **yes** | — | HMAC secret for auth JWTs |
 | `OPENROUTER_API_KEY` | **yes** | — | OpenRouter API key |
 | `FIRECRAWL_API_KEY` | **yes** | — | Firecrawl API key |
 | `AUTUMN_SECRET_KEY` | **yes** | — | Autumn billing secret key |
@@ -178,6 +179,11 @@ docker-compose up --build brand-monitor
 
 ### `GET /health`
 Returns `200 { status: "ok", ... }` — used by load balancers and docker healthchecks.
+
+### Auth
+`POST /api/auth/register`  
+`POST /api/auth/login`  
+`GET /api/auth/me` *(Bearer token required)*
 
 ### `POST /api/brand-monitor/scrape`  *(auth required)*
 Scrapes a URL and returns structured company info + generated prompts.

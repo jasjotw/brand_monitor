@@ -12,16 +12,20 @@ import {
     findExistingBrand,
     hydrateCompanyFromProfile,
     enrichCompanyFromProfile,
+    saveGeneratedCompetitors,
 } from '../services/brand.service';
 import {
-    identifyCompetitors,
+    identifyCompetitorDetails,
     resolveCompetitorUrlsFromNames,
     generatePromptsForCompany,
 } from '../services/ai.service';
 import { handleApiError, ValidationError } from '../utils/errors';
 import { validateCompetitorUrl } from '../utils/url.utils';
 import { assignUrlToCompetitor, deriveCompetitorNameFromUrl } from '../utils/competitor.utils';
-import { Company } from '../types';
+import { Company, IdealCustomerProfile } from '../types';
+import { db } from '../db/client';
+import { audienceProfiles } from '../db/schema';
+import { and, eq } from 'drizzle-orm';
 
 // ── Controller ───────────────────────────────────────────────
 
@@ -81,15 +85,18 @@ export async function scrapeHandler(req: Request, res: Response): Promise<void> 
 
         let mergedCompetitors = Array.from(
             new Set([...profileCompetitorNames, ...scrapedCompetitors]),
-        ).slice(0, 8);
+        ).slice(0, 10);
+
+        let aiGeneratedDetails: { name: string; url?: string }[] = [];
 
         // Supplement with AI-identified competitors when list is thin
-        if (mergedCompetitors.length < 8) {
-            const aiCompetitors = await identifyCompetitors(company).catch((e) => {
+        if (mergedCompetitors.length < 10) {
+            aiGeneratedDetails = await identifyCompetitorDetails(company).catch((e) => {
                 console.warn('[Scrape] Failed to identify competitors:', e);
-                return [] as string[];
+                return [] as { name: string; url: string }[];
             });
-            mergedCompetitors = Array.from(new Set([...mergedCompetitors, ...aiCompetitors])).slice(0, 8);
+            const aiCompetitors = aiGeneratedDetails.map((c) => c.name);
+            mergedCompetitors = Array.from(new Set([...mergedCompetitors, ...aiCompetitors])).slice(0, 10);
         }
 
         // ── 6. Resolve competitor URLs ─────────────────────────
@@ -115,6 +122,12 @@ export async function scrapeHandler(req: Request, res: Response): Promise<void> 
 
                 // Merge all detail sources
                 const mergedDetails = [...baseDetails, ...existingDetails];
+                aiGeneratedDetails.forEach((entry) => {
+                    if (!entry.url) return;
+                    if (!mergedDetails.some((item) => item.name.toLowerCase() === entry.name.toLowerCase())) {
+                        mergedDetails.push(entry);
+                    }
+                });
                 resolvedDetails.forEach((entry) => {
                     if (!entry.url) return;
                     if (!mergedDetails.some((item) => item.url === entry.url)) {
@@ -130,8 +143,32 @@ export async function scrapeHandler(req: Request, res: Response): Promise<void> 
                     return normalized ? { ...entry, url: normalized } : entry;
                 });
 
+                const dedupedDetails = (() => {
+                    const seenNames = new Set<string>();
+                    const seenUrls = new Set<string>();
+                    return filledDetails.filter((entry) => {
+                        const nameKey = entry.name.trim().toLowerCase();
+                        const urlKey = entry.url ? validateCompetitorUrl(entry.url)?.toLowerCase() : undefined;
+                        if (!nameKey) return false;
+                        if (seenNames.has(nameKey)) return false;
+                        if (urlKey && seenUrls.has(urlKey)) return false;
+                        seenNames.add(nameKey);
+                        if (urlKey) seenUrls.add(urlKey);
+                        return true;
+                    });
+                })();
+
                 if (company.scrapedData) {
-                    company.scrapedData.competitorDetails = filledDetails.slice(0, 8);
+                    company.scrapedData.competitorDetails = dedupedDetails.slice(0, 10);
+                }
+
+                if (existingBrand?.id) {
+                    await saveGeneratedCompetitors(
+                        existingBrand.id,
+                        dedupedDetails
+                            .filter((entry) => typeof entry.url === 'string' && Boolean(entry.url))
+                            .map((entry) => ({ name: entry.name, url: entry.url! })),
+                    );
                 }
             } catch (e) {
                 console.warn('[Scrape] Failed to resolve competitor URLs:', e);
@@ -139,7 +176,24 @@ export async function scrapeHandler(req: Request, res: Response): Promise<void> 
         }
 
         // ── 7. Generate prompts ────────────────────────────────
-        const prompts = await generatePromptsForCompany(company, mergedCompetitors).catch((e) => {
+        let icp: IdealCustomerProfile | undefined;
+        if (existingBrand?.id) {
+            const [audience] = await db
+                .select({ icp: audienceProfiles.icp })
+                .from(audienceProfiles)
+                .where(
+                    and(
+                        eq(audienceProfiles.userId, userId),
+                        eq(audienceProfiles.brandId, existingBrand.id),
+                    ),
+                )
+                .limit(1);
+            if (audience?.icp && typeof audience.icp === 'object') {
+                icp = audience.icp as IdealCustomerProfile;
+            }
+        }
+
+        const prompts = await generatePromptsForCompany(company, mergedCompetitors, undefined, icp).catch((e) => {
             console.error('[Scrape] Prompt generation FAILED:', e?.message ?? e);
             if (e?.cause) console.error('[Scrape] Cause:', e.cause);
             return [];
@@ -148,6 +202,7 @@ export async function scrapeHandler(req: Request, res: Response): Promise<void> 
         // ── 8. Respond ─────────────────────────────────────────
         res.json({ company, prompts });
     } catch (error) {
+        console.error('[Scrape] Unhandled controller error:', error);
         handleApiError(error, res);
     }
 }

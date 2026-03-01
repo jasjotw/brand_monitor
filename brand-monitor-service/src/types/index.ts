@@ -42,10 +42,65 @@ export interface Persona {
     avatar?: string;
 }
 
+export type IntentLayer =
+    | 'organic_discovery'
+    | 'category_authority'
+    | 'competitive_evaluation'
+    | 'replacement_intent'
+    | 'conversational_recall';
+
+export type PromptCategory =
+    | IntentLayer
+    | 'ranking'
+    | 'comparison'
+    | 'alternatives'
+    | 'recommendations';
+
+export interface IdealCustomerProfile {
+    summary: string;
+    industries: string[];
+    companySize: string;
+    annualRevenueRange: string;
+    geographies: string[];
+    budgetRange: string;
+    buyingCommittee: string[];
+    painPoints: string[];
+    successCriteria: string[];
+    icp_summary?: string;
+    firmographics?: Record<string, unknown>;
+    buyer_committee?: Record<string, unknown>;
+    pain_points?: string[];
+    jtbd?: {
+        functional: string[];
+        emotional: string[];
+        social: string[];
+    };
+    ai_search_behavior?: Record<string, unknown>;
+    trigger_events?: string[];
+    buying_criteria?: {
+        must_have: string[];
+        nice_to_have: string[];
+        deal_breakers: string[];
+    };
+    objections?: string[];
+    disqualification_criteria?: string[];
+    intent_signals?: {
+        content: string[];
+        behavioral: string[];
+        technographic: string[];
+        geo_relevant: string[];
+    };
+    messaging_angles?: {
+        value_props: string[];
+        proof_points: string[];
+    };
+    priority_segments?: Array<Record<string, unknown> | string>;
+}
+
 export interface BrandPrompt {
     id: string;
     prompt: string;
-    category: 'ranking' | 'comparison' | 'alternatives' | 'recommendations';
+    category: PromptCategory;
     persona?: string;
     source?: string;
 }
@@ -60,6 +115,9 @@ export interface CompanyRanking {
 export interface AIResponse {
     provider: string;
     prompt: string;
+    promptId?: string;
+    intentLayer?: IntentLayer;
+    promptSeededBrand?: boolean;
     response: string;
     rankings?: CompanyRanking[];
     competitors: string[];
@@ -74,6 +132,41 @@ export interface AIResponse {
         | Map<string, { text: string; index: number; confidence: number }[]>
         | Record<string, { text: string; index: number; confidence: number }[]>;
     };
+}
+
+export interface ParsedResponseSignal {
+    brandId?: string;
+    llmProvider: string;
+    promptId?: string;
+    intentLayer: IntentLayer;
+    promptText: string;
+    responseText: string;
+    timestamp: string;
+    brandSeededInPrompt: boolean;
+    explicitMention: 0 | 1;
+    explicitCount: number;
+    implicitMention: 0 | 1;
+    implicitSimilarityScore: number;
+    rankingPosition?: number;
+    rankingScore: number;
+    sentiment: -1 | 0 | 1;
+    sentimentNormalized: number;
+    citationPresence: 0 | 1;
+    citationCount: number;
+    brandMentioned: boolean;
+    brandMentionCount: number;
+    mentionsAcrossAllBrands: number;
+}
+
+export interface IntentScoreRecord {
+    brandId?: string;
+    llmProvider: string;
+    intentLayer: IntentLayer;
+    timestamp: string;
+    rawScore: number;
+    adjustedScore: number;
+    unitCount: number;
+    metric: 'visibility' | 'competitive_strength' | 'switch_opportunity' | 'narrative_authority';
 }
 
 export interface CompetitorRanking {
@@ -119,6 +212,8 @@ export interface BrandAnalysis {
     sentimentScore: number;
     shareOfVoice: number;
     averagePosition?: number;
+    parsedSignals?: ParsedResponseSignal[];
+    scoreRecords?: IntentScoreRecord[];
 }
 
 // ── SSE ──────────────────────────────────────────────────────

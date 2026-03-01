@@ -39,12 +39,21 @@ export const env = {
     // Auth
     BETTER_AUTH_SECRET: optionalEnv('BETTER_AUTH_SECRET'),
     BETTER_AUTH_URL: optionalEnv('BETTER_AUTH_URL', 'http://localhost:3001'),
+    JWT_SECRET: optionalEnv('JWT_SECRET'),
 
     // Superuser
     SUPERUSER_EMAILS: optionalEnv('SUPERUSER_EMAILS', ''),
 
     // Geo/Proxy service
     GEO_SERVICE_URL: optionalEnv('GEO_SERVICE_URL', 'http://localhost:3002'),
+
+    // DataForSEO
+    DATAFORSEO_LOGIN: optionalEnv('DATAFORSEO_LOGIN'),
+    DATAFORSEO_PASSWORD: optionalEnv('DATAFORSEO_PASSWORD'),
+
+    // Diagnostics provider
+    DIAGNOSTICS_SERVICE_URL: optionalEnv('DIAGNOSTICS_SERVICE_URL'),
+    DIAGNOSTICS_API_KEY: optionalEnv('DIAGNOSTICS_API_KEY'),
 
     // Misc
     USE_MOCK_MODE: optionalEnv('USE_MOCK_MODE', 'false') === 'true',

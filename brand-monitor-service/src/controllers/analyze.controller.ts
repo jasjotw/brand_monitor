@@ -13,11 +13,15 @@
 import { Request, Response } from 'express';
 import { performAnalysis } from '../services/analysis.service';
 import { checkCredits, trackCredits, getRemainingCredits } from '../services/credit.service';
-import { getBrandLocation } from '../services/brand.service';
+import { findExistingBrand, getBrandLocation } from '../services/brand.service';
 import { createSSEMessage } from '../utils/sse.utils';
 import { handleApiError, AuthenticationError, ValidationError } from '../utils/errors';
 import { CREDITS_PER_BRAND_ANALYSIS, ERROR_MESSAGES } from '../config/constants';
-import { SSEEvent, Company } from '../types';
+import { SSEEvent, Company, Persona, IdealCustomerProfile } from '../types';
+import { and, eq } from 'drizzle-orm';
+import { db } from '../db/client';
+import { audienceProfiles } from '../db/schema';
+import { createAnalysis, updateAnalysis } from '../services/analysis-crud.service';
 
 // ── Controller ───────────────────────────────────────────────
 
@@ -59,6 +63,10 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
 
     // ── 3. Enrich company with stored location (if available) ─
     const company = { ...rawCompany } as Company;
+    let baseQuery: string | undefined;
+    let personas: Persona[] | undefined;
+    let icp: IdealCustomerProfile | undefined;
+    let brandId: string | undefined;
 
     if (company.url) {
         let normalizedUrl = company.url.trim();
@@ -69,6 +77,37 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
         if (normalizedUrl) {
             const location = await getBrandLocation(userId, normalizedUrl).catch(() => undefined);
             if (location) company.location = location;
+
+            const brand = await findExistingBrand(userId, normalizedUrl).catch(() => null);
+            if (brand?.id) {
+                brandId = brand.id;
+                const [audience] = await db
+                    .select({
+                        additionalInputs: audienceProfiles.additionalInputs,
+                        personas: audienceProfiles.personas,
+                        icp: audienceProfiles.icp,
+                    })
+                    .from(audienceProfiles)
+                    .where(
+                        and(
+                            eq(audienceProfiles.userId, userId),
+                            eq(audienceProfiles.brandId, brand.id),
+                        ),
+                    )
+                    .limit(1);
+
+                const raw = audience?.additionalInputs as Record<string, unknown> | undefined;
+                const stored = typeof raw?.baseQuery === 'string' ? raw.baseQuery.trim() : '';
+                const deleted = raw?.baseQueryDeleted === true || raw?.baseQueryDeleted === 'true';
+                if (stored && !deleted) baseQuery = stored;
+
+                if (Array.isArray(audience?.personas) && audience.personas.length > 0) {
+                    personas = audience.personas as Persona[];
+                }
+                if (audience?.icp && typeof audience.icp === 'object') {
+                    icp = audience.icp as IdealCustomerProfile;
+                }
+            }
         }
     }
 
@@ -104,6 +143,8 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
     // ── 8. Async pipeline (non-blocking) ─────────────────────
     (async () => {
         try {
+            let analysisId: string | undefined;
+
             // Send initial credit information
             await sendEvent({
                 type: 'credits',
@@ -116,10 +157,71 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
             const analysisResult = await performAnalysis({
                 company,
                 prompts,
+                personas,
+                icp,
+                baseQuery,
                 userSelectedCompetitors,
                 useWebSearch,
+                onPromptsReady: async ({ prompts: generatedPrompts, competitors }) => {
+                    const draftAnalysisData = {
+                        status: 'in_progress',
+                        company,
+                        knownCompetitors: competitors,
+                        prompts: generatedPrompts,
+                        responses: [],
+                        useWebSearch,
+                        startedAt: new Date().toISOString(),
+                    };
+
+                    const row = await createAnalysis({
+                        userId,
+                        brandId,
+                        url: company.url,
+                        companyName: company.name,
+                        industry: company.industry,
+                        analysisData: draftAnalysisData,
+                        competitors,
+                        prompts: generatedPrompts,
+                        creditsUsed: CREDITS_PER_BRAND_ANALYSIS,
+                    });
+                    analysisId = row.id;
+                },
+                onResponseReady: async ({ responses, competitors }) => {
+                    if (!analysisId) return;
+                    await updateAnalysis({
+                        analysisId,
+                        userId,
+                        companyName: company.name,
+                        industry: company.industry,
+                        competitors,
+                        analysisData: {
+                            status: 'in_progress',
+                            company,
+                            knownCompetitors: competitors,
+                            responses,
+                            useWebSearch,
+                            updatedAt: new Date().toISOString(),
+                        },
+                    });
+                },
                 sendEvent,
             });
+
+            if (analysisId) {
+                await updateAnalysis({
+                    analysisId,
+                    userId,
+                    companyName: company.name,
+                    industry: company.industry,
+                    competitors: analysisResult.knownCompetitors,
+                    prompts: analysisResult.prompts,
+                    analysisData: {
+                        ...analysisResult,
+                        status: 'completed',
+                        completedAt: new Date().toISOString(),
+                    },
+                });
+            }
 
             // Emit completion event
             await sendEvent({

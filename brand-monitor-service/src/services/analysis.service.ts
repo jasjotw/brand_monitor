@@ -15,10 +15,13 @@
 import {
     Company,
     BrandPrompt,
+    Persona,
+    IdealCustomerProfile,
     AIResponse,
     CompetitorRanking,
     ProviderSpecificRanking,
     ProviderComparisonData,
+    IntentLayer,
     SSEEvent,
     ProgressData,
     PromptGeneratedData,
@@ -43,9 +46,27 @@ export interface AnalysisConfig {
     company: Company;
     /** Pre-built prompts; if absent, they are generated dynamically. */
     prompts?: BrandPrompt[];
+    /** Personas to always inject into prompt generation context. */
+    personas?: Persona[];
+    /** ICP to bias generated prompts toward target customers. */
+    icp?: IdealCustomerProfile;
+    /** Optional location-aware seed query persisted in audience profile. */
+    baseQuery?: string;
     /** Competitor list supplied by the user (overrides AI identification). */
     userSelectedCompetitors?: { name?: string; url?: string }[];
     useWebSearch?: boolean;
+    onPromptsReady?: (payload: {
+        prompts: BrandPrompt[];
+        competitors: string[];
+        company: Company;
+    }) => Promise<void> | void;
+    onResponseReady?: (payload: {
+        response: AIResponse;
+        responses: AIResponse[];
+        prompt: BrandPrompt;
+        company: Company;
+        competitors: string[];
+    }) => Promise<void> | void;
     sendEvent: (event: SSEEvent) => Promise<void>;
 }
 
@@ -60,6 +81,8 @@ export interface AnalysisResult {
     providerComparison: ProviderComparisonData[];
     errors?: string[];
     webSearchUsed?: boolean;
+    parsedSignals?: any[];
+    scoreRecords?: any[];
 }
 
 /** AIProvider descriptor for the analysis loop. */
@@ -85,10 +108,27 @@ export function getAvailableProviders(): AIProvider[] {
 export async function performAnalysis({
     company,
     prompts,
+    personas,
+    icp,
+    baseQuery,
     userSelectedCompetitors,
     useWebSearch = false,
+    onPromptsReady,
+    onResponseReady,
     sendEvent,
 }: AnalysisConfig): Promise<AnalysisResult> {
+    const intentFromCategory = (category?: string): IntentLayer => {
+        const key = (category || '').toLowerCase();
+        if (key === 'organic_discovery') return 'organic_discovery';
+        if (key === 'category_authority') return 'category_authority';
+        if (key === 'competitive_evaluation') return 'competitive_evaluation';
+        if (key === 'replacement_intent') return 'replacement_intent';
+        if (key === 'conversational_recall') return 'conversational_recall';
+        if (key === 'comparison') return 'competitive_evaluation';
+        if (key === 'alternatives') return 'replacement_intent';
+        if (key === 'recommendations') return 'conversational_recall';
+        return 'category_authority';
+    };
     // ── 0. Start ──────────────────────────────────────────────
 
     await sendEvent({
@@ -183,8 +223,26 @@ export async function performAnalysis({
     if (prompts && prompts.length > 0) {
         analysisPrompts = prompts;
     } else {
-        const generated = await generatePromptsForCompany(company, competitors);
+        const generated = await generatePromptsForCompany(company, competitors, personas, icp);
         analysisPrompts = generated.slice(0, 4);
+    }
+
+    const trimmedBaseQuery = typeof baseQuery === 'string' ? baseQuery.trim() : '';
+    if (trimmedBaseQuery) {
+        const exists = analysisPrompts.some(
+            (p) => p.prompt.trim().toLowerCase() === trimmedBaseQuery.toLowerCase(),
+        );
+        if (!exists) {
+            analysisPrompts = [
+                {
+                    id: 'base-query',
+                    prompt: trimmedBaseQuery,
+                    category: 'recommendations' as const,
+                    source: 'base-query',
+                },
+                ...analysisPrompts,
+            ].slice(0, 5);
+        }
     }
 
     for (let i = 0; i < analysisPrompts.length; i++) {
@@ -198,6 +256,14 @@ export async function performAnalysis({
                 total: analysisPrompts.length,
             } as PromptGeneratedData,
             timestamp: new Date(),
+        });
+    }
+
+    if (onPromptsReady) {
+        await onPromptsReady({
+            prompts: analysisPrompts,
+            competitors,
+            company,
         });
     }
 
@@ -293,7 +359,24 @@ export async function performAnalysis({
 
                     if (useMockMode) await new Promise((r) => setTimeout(r, Math.random() * 1000 + 500));
 
-                    responses.push(response);
+                    const enrichedResponse: AIResponse = {
+                        ...response,
+                        promptId: prompt.id,
+                        intentLayer: intentFromCategory(prompt.category),
+                        promptSeededBrand: prompt.prompt.toLowerCase().includes(company.name.toLowerCase()),
+                    };
+
+                    responses.push(enrichedResponse);
+
+                    if (onResponseReady) {
+                        await onResponseReady({
+                            response: enrichedResponse,
+                            responses: [...responses],
+                            prompt,
+                            company,
+                            competitors,
+                        });
+                    }
 
                     await sendEvent({
                         type: 'partial-result',
@@ -302,10 +385,10 @@ export async function performAnalysis({
                             provider: provider.name,
                             prompt: prompt.prompt,
                             response: {
-                                provider: response.provider,
-                                brandMentioned: response.brandMentioned,
-                                brandPosition: response.brandPosition,
-                                sentiment: response.sentiment,
+                                provider: enrichedResponse.provider,
+                                brandMentioned: enrichedResponse.brandMentioned,
+                                brandPosition: enrichedResponse.brandPosition,
+                                sentiment: enrichedResponse.sentiment,
                             },
                         } as PartialResultData,
                         timestamp: new Date(),
@@ -406,7 +489,17 @@ export async function performAnalysis({
     }
 
     const { providerRankings, providerComparison } = await analyzeCompetitorsByProvider(company, responses, competitors);
-    const scores = calculateBrandScores(responses, company.name, competitorRankings);
+    const scores = await calculateBrandScores(
+        responses,
+        company.name,
+        competitorRankings,
+        analysisPrompts,
+        {
+            brandDescription: company.description || company.scrapedData?.description || '',
+            brandId: company.id,
+            usp: Array.isArray((company as any)?.scrapedData?.usp) ? (company as any).scrapedData.usp : [],
+        },
+    );
 
     await sendEvent({
         type: 'progress',
@@ -435,5 +528,7 @@ export async function performAnalysis({
         providerComparison,
         errors: errors.length > 0 ? errors : undefined,
         webSearchUsed: useWebSearch,
+        parsedSignals: scores.parsedSignals,
+        scoreRecords: scores.scoreRecords,
     };
 }

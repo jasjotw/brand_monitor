@@ -1,16 +1,7 @@
-// ─────────────────────────────────────────────────────────────
-// src/middleware/auth.middleware.ts
-// Source: auth.api.getSession() calls in all Next.js route handlers
-//
-// Validates the better-auth session cookie and attaches the user
-// to res.locals.user so downstream controllers can access it.
-// ─────────────────────────────────────────────────────────────
-
 import { Request, Response, NextFunction } from 'express';
 import { auth } from '../config/auth';
 import { AuthenticationError } from '../utils/errors';
-
-// ── Extended locals ─────────────────────────────────────────
+import { verifyToken } from '../utils/jwt';
 
 declare global {
     namespace Express {
@@ -25,18 +16,25 @@ declare global {
     }
 }
 
-// ── Middleware ───────────────────────────────────────────────
-
 /**
- * Validates the session attached to the incoming request.
- * Attaches `res.locals.user` on success.
- * Returns 401 on failure.
+ * Auth middleware supporting both JWT Bearer tokens and better-auth sessions.
  */
 export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-        // ── Dev bypass (local Postman testing only) ───────────
-        // Send header  X-Dev-User-Id: test-user-id  to skip real auth.
-        // NEVER active in production (NODE_ENV !== 'development').
+        const authHeader = req.headers['authorization'];
+        if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.slice(7);
+            const payload = verifyToken(token);
+            res.locals.user = {
+                id: String(payload.userId),
+                email: payload.email,
+                name: null,
+                image: null,
+            };
+            return next();
+        }
+
+        // Dev bypass (local testing only)
         if (process.env.NODE_ENV === 'development') {
             const devUserId = req.headers['x-dev-user-id'] as string | undefined;
             if (devUserId) {
@@ -50,7 +48,6 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
             }
         }
 
-        // better-auth reads cookies / Authorization header from the raw request headers
         const sessionResponse = await auth.api.getSession({
             headers: req.headers as any,
         });
@@ -71,26 +68,27 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
                     timestamp: new Date().toISOString(),
                 },
             });
-        } else {
-            console.error('[Auth Middleware]', err);
-            res.status(401).json({
-                error: {
-                    message: 'Authentication failed',
-                    code: 'UNAUTHORIZED',
-                    statusCode: 401,
-                    timestamp: new Date().toISOString(),
-                },
-            });
+            return;
         }
+
+        const message = err instanceof Error ? err.message : 'Authentication failed';
+        const code = message.toLowerCase().includes('expired')
+            ? 'TOKEN_EXPIRED'
+            : 'UNAUTHORIZED';
+
+        res.status(401).json({
+            error: {
+                message,
+                code,
+                statusCode: 401,
+                timestamp: new Date().toISOString(),
+            },
+        });
     }
 }
 
-
-// ── Helpers ──────────────────────────────────────────────────
-
 /**
  * Returns true if the authenticated user is a superuser.
- * Superuser emails are comma-separated in SUPERUSER_EMAILS env var.
  */
 export function isSuperuser(email?: string | null): boolean {
     if (!email) return false;
