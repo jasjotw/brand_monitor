@@ -12,35 +12,46 @@
 // the Autumn SDK in credit.service.ts without needing the plugin.
 // ─────────────────────────────────────────────────────────────
 
-import { betterAuth } from 'better-auth';
 import { Pool } from 'pg';
 
-export const auth = betterAuth({
-    database: new Pool({
-        connectionString: process.env.DATABASE_URL!,
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    }),
-    secret: process.env.BETTER_AUTH_SECRET!,
-    baseURL: process.env.WEBAPP_BASE_URL || 'http://localhost:3000',
-    emailAndPassword: {
-        enabled: true,
-        requireEmailVerification: false,
-    },
-    session: {
-        expiresIn: 60 * 60 * 24 * 7,   // 7 days — must match WebApp
-        updateAge: 60 * 60 * 24,         // update if older than 1 day
-        cookieOptions: {
-            httpOnly: true,
-            sameSite: 'lax' as const,
-            secure: process.env.NODE_ENV === 'production',
-            path: '/',
+let authInstance: any = null;
+
+export async function getAuth() {
+    if (authInstance) return authInstance;
+
+    // Use eval to prevent TypeScript from converting this into a CommonJS require()
+    // This allows us to load the ESM-only 'better-auth' package in our CommonJS project
+    const { betterAuth } = await eval("import('better-auth')");
+
+    authInstance = betterAuth({
+        database: new Pool({
+            connectionString: process.env.DATABASE_URL!,
+            ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+        }),
+        secret: process.env.BETTER_AUTH_SECRET!,
+        baseURL: process.env.WEBAPP_BASE_URL || 'http://localhost:3000',
+        emailAndPassword: {
+            enabled: true,
+            requireEmailVerification: false,
         },
-    },
-    advanced: {
-        crossSubDomainCookies: {
-            enabled: process.env.NODE_ENV === 'production',
+        session: {
+            expiresIn: 60 * 60 * 24 * 7,   // 7 days — must match WebApp
+            updateAge: 60 * 60 * 24,         // update if older than 1 day
+            cookieOptions: {
+                httpOnly: true,
+                sameSite: 'lax' as const,
+                secure: process.env.NODE_ENV === 'production',
+                path: '/',
+            },
         },
-    },
-    // No plugins — autumn() is not needed for session validation only.
-    // Credit tracking is handled directly in credit.service.ts.
-});
+        advanced: {
+            crossSubDomainCookies: {
+                enabled: process.env.NODE_ENV === 'production',
+            },
+        },
+        // No plugins — autumn() is not needed for session validation only.
+        // Credit tracking is handled directly in credit.service.ts.
+    });
+
+    return authInstance;
+}

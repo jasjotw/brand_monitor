@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { auth } from '../config/auth';
+import { getAuth } from '../config/auth';
 import { AuthenticationError } from '../utils/errors';
 import { verifyToken } from '../utils/jwt';
 
@@ -48,6 +48,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
             }
         }
 
+        const auth = await getAuth();
         const sessionResponse = await auth.api.getSession({
             headers: req.headers as any,
         });
