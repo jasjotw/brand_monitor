@@ -1,4 +1,4 @@
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/client';
 import { users } from '../../db/schema';
@@ -70,6 +70,7 @@ export async function getMe(
             phone: users.phone,
             createdAt: users.createdAt,
             updatedAt: users.updatedAt,
+            config: users.config,
         })
         .from(users)
         .where(eq(users.id, userId))
