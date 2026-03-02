@@ -1,6 +1,7 @@
 "use client";
 
-import React from "react"
+import React, { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 import { Bell, TrendingUp, TrendingDown, Zap, MessageSquare, AlertTriangle, Check, Filter, Settings } from "lucide-react";
@@ -73,7 +74,28 @@ const severityBadge: Record<string, string> = {
 
 export function AlertsPage() {
   const { data, loading, error, refresh } = useAnalyticsSection<any>("alerts");
+  const searchParams = useSearchParams();
+  const [showFilters, setShowFilters] = useState(false);
+  const [searchFilter, setSearchFilter] = useState("");
+  const [severityFilter, setSeverityFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [readFilter, setReadFilter] = useState("all");
+  const globalQuery = (searchParams.get("q") || "").trim().toLowerCase();
   const allAlerts = mapAlerts(data);
+  const filteredAlerts = useMemo(() => {
+    const needle = searchFilter.trim().toLowerCase();
+    return allAlerts.filter((alert) => {
+      const haystack = `${alert.title} ${alert.description}`.toLowerCase();
+      const matchesSearch = !needle || haystack.includes(needle);
+      const matchesGlobalSearch = !globalQuery || haystack.includes(globalQuery);
+      const matchesSeverity = severityFilter === "all" || alert.severity === severityFilter;
+      const matchesType = typeFilter === "all" || alert.type === typeFilter;
+      const matchesRead =
+        readFilter === "all" ||
+        (readFilter === "read" ? alert.read : !alert.read);
+      return matchesSearch && matchesGlobalSearch && matchesSeverity && matchesType && matchesRead;
+    });
+  }, [allAlerts, globalQuery, readFilter, searchFilter, severityFilter, typeFilter]);
   const unread = allAlerts.filter((a) => !a.read).length;
   const criticalCount = allAlerts.filter((a) => a.severity === "critical").length;
   const warningCount = allAlerts.filter((a) => a.severity === "warning").length;
@@ -117,7 +139,10 @@ export function AlertsPage() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <button className="nav-item flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground">
+            <button
+              onClick={() => setShowFilters((prev) => !prev)}
+              className="nav-item flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+            >
               <Filter size={11} strokeWidth={1.5} />
               Filter
             </button>
@@ -127,15 +152,70 @@ export function AlertsPage() {
             </button>
           </div>
         </div>
+        {showFilters && (
+          <div className="border-b border-border px-5 py-3">
+            <div className="grid grid-cols-1 gap-2 md:grid-cols-5">
+              <input
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+                placeholder="Search alerts..."
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs outline-none ring-0 focus:border-primary"
+              />
+              <select
+                value={severityFilter}
+                onChange={(e) => setSeverityFilter(e.target.value)}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs outline-none ring-0 focus:border-primary"
+              >
+                <option value="all">All severities</option>
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="critical">Critical</option>
+              </select>
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs outline-none ring-0 focus:border-primary"
+              >
+                <option value="all">All types</option>
+                <option value="visibility_drop">Visibility drop</option>
+                <option value="visibility_spike">Visibility spike</option>
+                <option value="new_mention">New mention</option>
+                <option value="competitor">Competitor</option>
+                <option value="sentiment">Sentiment</option>
+                <option value="diagnostic">Diagnostic</option>
+              </select>
+              <select
+                value={readFilter}
+                onChange={(e) => setReadFilter(e.target.value)}
+                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs outline-none ring-0 focus:border-primary"
+              >
+                <option value="all">Read + unread</option>
+                <option value="unread">Only unread</option>
+                <option value="read">Only read</option>
+              </select>
+              <button
+                onClick={() => {
+                  setSearchFilter("");
+                  setSeverityFilter("all");
+                  setTypeFilter("all");
+                  setReadFilter("all");
+                }}
+                className="rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-secondary hover:text-foreground"
+              >
+                Clear filters
+              </button>
+            </div>
+          </div>
+        )}
         <div className="flex flex-col">
-          {allAlerts.length === 0 && !loading ? (
+          {filteredAlerts.length === 0 && !loading ? (
             <div className="px-5 py-4 text-xs text-muted-foreground">No alerts yet.</div>
-          ) : allAlerts.map((alert, i) => (
+          ) : filteredAlerts.map((alert, i) => (
             <div
               key={alert.id}
               className={cn(
                 "flex gap-3 px-5 py-4 transition-colors hover:bg-secondary/30",
-                i < allAlerts.length - 1 && "border-b border-border/50",
+                i < filteredAlerts.length - 1 && "border-b border-border/50",
                 !alert.read && "bg-primary/[0.02]"
               )}
             >

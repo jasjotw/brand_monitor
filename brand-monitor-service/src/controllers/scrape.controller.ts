@@ -6,7 +6,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { Request, Response } from 'express';
-import { checkCredits } from '../services/credit.service';
+import { chargeFeature, checkCredits, estimateFeatureCost } from '../services/credit.service';
 import { scrapeCompanyInfo } from '../services/scraper.service';
 import {
     findExistingBrand,
@@ -26,15 +26,18 @@ import { Company, IdealCustomerProfile } from '../types';
 import { db } from '../db/client';
 import { audienceProfiles } from '../db/schema';
 import { and, eq } from 'drizzle-orm';
+import { logMethodEntry } from '../utils/logger';
+import { CREDITS_PER_SCRAPE } from '../config/constants';
 
 // ── Controller ───────────────────────────────────────────────
 
 export async function scrapeHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('scrape.scrapeHandler');
         const userId: string = res.locals.user.id;
 
         // ── 1. Credit check (soft — scraping costs 1 credit) ───
-        await checkCredits(userId, 1, '[Scrape]');
+        await checkCredits(userId, estimateFeatureCost('scrape', 1), '[Scrape]');
 
         // ── 2. Validate & normalise URL ────────────────────────
         const { url, maxAge } = req.body as { url?: string; maxAge?: number };
@@ -200,9 +203,21 @@ export async function scrapeHandler(req: Request, res: Response): Promise<void> 
         });
 
         // ── 8. Respond ─────────────────────────────────────────
+        await chargeFeature({
+            userId,
+            featureCode: 'scrape',
+            quantity: 1,
+            referenceType: 'scrape',
+            referenceId: normalizedUrl,
+            metadata: { url: normalizedUrl },
+            logTag: '[Scrape]',
+        });
+
         res.json({ company, prompts });
     } catch (error) {
         console.error('[Scrape] Unhandled controller error:', error);
         handleApiError(error, res);
     }
 }
+
+

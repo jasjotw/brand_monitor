@@ -10,6 +10,7 @@ import {
     buildSourceAttribution,
 } from '../services/analytics.service';
 import { buildDiagnosticsAnalytics } from '../services/diagnostics.service';
+import { logMethodEntry } from '../utils/logger';
 
 function readLimit(value: unknown): number | undefined {
     const parsed = Number(value);
@@ -28,6 +29,7 @@ async function loadRuns(req: Request, res: Response): Promise<{ runs: any[]; res
 
 export async function overviewAnalyticsHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analytics.overviewAnalyticsHandler');
         const { runs, resolvedBrandId } = await loadRuns(req, res);
         res.json({
             brandId: resolvedBrandId || null,
@@ -40,6 +42,7 @@ export async function overviewAnalyticsHandler(req: Request, res: Response): Pro
 
 export async function visibilityAnalyticsHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analytics.visibilityAnalyticsHandler');
         const { runs, resolvedBrandId } = await loadRuns(req, res);
         res.json({
             brandId: resolvedBrandId || null,
@@ -52,6 +55,7 @@ export async function visibilityAnalyticsHandler(req: Request, res: Response): P
 
 export async function competitorsAnalyticsHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analytics.competitorsAnalyticsHandler');
         const { runs, resolvedBrandId } = await loadRuns(req, res);
         res.json({
             brandId: resolvedBrandId || null,
@@ -64,6 +68,7 @@ export async function competitorsAnalyticsHandler(req: Request, res: Response): 
 
 export async function promptsAnalyticsHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analytics.promptsAnalyticsHandler');
         const { runs, resolvedBrandId } = await loadRuns(req, res);
         res.json({
             brandId: resolvedBrandId || null,
@@ -76,6 +81,7 @@ export async function promptsAnalyticsHandler(req: Request, res: Response): Prom
 
 export async function alertsAnalyticsHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analytics.alertsAnalyticsHandler');
         const { runs, resolvedBrandId } = await loadRuns(req, res);
         res.json({
             brandId: resolvedBrandId || null,
@@ -88,6 +94,7 @@ export async function alertsAnalyticsHandler(req: Request, res: Response): Promi
 
 export async function sourcesAnalyticsHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analytics.sourcesAnalyticsHandler');
         const { runs, resolvedBrandId } = await loadRuns(req, res);
         res.json({
             brandId: resolvedBrandId || null,
@@ -100,6 +107,7 @@ export async function sourcesAnalyticsHandler(req: Request, res: Response): Prom
 
 export async function diagnosticsAnalyticsHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analytics.diagnosticsAnalyticsHandler');
         const userId = String(res.locals.user.id);
         const brandId = typeof req.query.brandId === 'string' && req.query.brandId.trim()
             ? req.query.brandId.trim()
@@ -113,6 +121,7 @@ export async function diagnosticsAnalyticsHandler(req: Request, res: Response): 
 
 export async function dashboardAnalyticsHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analytics.dashboardAnalyticsHandler');
         const { runs, resolvedBrandId } = await loadRuns(req, res);
         res.json({
             brandId: resolvedBrandId || null,

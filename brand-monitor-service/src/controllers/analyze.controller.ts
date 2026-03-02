@@ -1,42 +1,112 @@
-// ─────────────────────────────────────────────────────────────
-// src/controllers/analyze.controller.ts
-// Source: WebApp/app/api/brand-monitor/analyze/route.ts
-//
-// POST /api/brand-monitor/analyze   (SSE stream)
-//
-// The response is an unbuffered Server-Sent Events stream.
-// The full analysis pipeline runs inside an async IIFE so the
-// route returns the SSE headers immediately while the work
-// happens in the background.
-// ─────────────────────────────────────────────────────────────
-
 import { Request, Response } from 'express';
+import { and, desc, eq } from 'drizzle-orm';
 import { performAnalysis } from '../services/analysis.service';
-import { checkCredits, trackCredits, getRemainingCredits } from '../services/credit.service';
+import {
+    captureFeatureCredits,
+    checkCredits,
+    estimateFeatureCost,
+    getFeatureUnitCost,
+    getRemainingCredits,
+    reconcileReservationAfterError,
+    reserveFeatureCredits,
+} from '../services/credit.service';
 import { findExistingBrand, getBrandLocation } from '../services/brand.service';
 import { createSSEMessage } from '../utils/sse.utils';
-import { handleApiError, AuthenticationError, ValidationError } from '../utils/errors';
-import { CREDITS_PER_BRAND_ANALYSIS, ERROR_MESSAGES } from '../config/constants';
+import { handleApiError } from '../utils/errors';
+import { ERROR_MESSAGES } from '../config/constants';
 import { SSEEvent, Company, Persona, IdealCustomerProfile } from '../types';
-import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client';
-import { audienceProfiles } from '../db/schema';
+import { audienceProfiles, brandAnalyses } from '../db/schema';
 import { createAnalysis, updateAnalysis } from '../services/analysis-crud.service';
+import { logMethodEntry } from '../utils/logger';
 
-// ── Controller ───────────────────────────────────────────────
+function normalizePromptKey(value: string): string {
+    return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeDraftPrompts(value: unknown): Array<{ id?: string; prompt: string; [key: string]: unknown }> {
+    if (!Array.isArray(value)) return [];
+    const normalized: Array<{ id?: string; prompt: string; [key: string]: unknown }> = [];
+    for (const entry of value) {
+        if (!entry || typeof entry !== 'object') continue;
+        const candidate = entry as Record<string, unknown>;
+        const prompt = typeof candidate.prompt === 'string' ? candidate.prompt.trim() : '';
+        if (!prompt) continue;
+        normalized.push({
+            ...candidate,
+            id: typeof candidate.id === 'string' ? candidate.id : undefined,
+            prompt,
+        });
+    }
+    return normalized;
+}
+
+async function removeRunningPromptsFromDraft(input: {
+    userId: string;
+    brandId: string;
+    runPrompts: unknown;
+}): Promise<void> {
+    const runPromptList = normalizeDraftPrompts(input.runPrompts);
+    if (runPromptList.length === 0) return;
+
+    const [latestDraft] = await db
+        .select()
+        .from(brandAnalyses)
+        .where(and(eq(brandAnalyses.userId, input.userId), eq(brandAnalyses.brandId, input.brandId)))
+        .orderBy(desc(brandAnalyses.updatedAt), desc(brandAnalyses.createdAt))
+        .limit(20);
+
+    if (!latestDraft) return;
+    const status = (latestDraft.analysisData as Record<string, unknown> | null)?.status;
+    if (status !== 'prompt_draft') return;
+
+    const draftPrompts = normalizeDraftPrompts(latestDraft.draftPrompts);
+    if (draftPrompts.length === 0) return;
+
+    const runIds = new Set(
+        runPromptList
+            .map((prompt) => (typeof prompt.id === 'string' ? prompt.id.trim() : ''))
+            .filter(Boolean),
+    );
+    const runTexts = new Set(runPromptList.map((prompt) => normalizePromptKey(prompt.prompt)));
+
+    const remaining = draftPrompts.filter((prompt) => {
+        const byId = typeof prompt.id === 'string' && prompt.id.trim() && runIds.has(prompt.id.trim());
+        const byText = runTexts.has(normalizePromptKey(prompt.prompt));
+        return !(byId || byText);
+    });
+
+    if (remaining.length === draftPrompts.length) return;
+
+    const existingAnalysisData =
+        latestDraft.analysisData && typeof latestDraft.analysisData === 'object'
+            ? (latestDraft.analysisData as Record<string, unknown>)
+            : {};
+    const existingPromptMeta =
+        existingAnalysisData.promptDraftMeta && typeof existingAnalysisData.promptDraftMeta === 'object'
+            ? (existingAnalysisData.promptDraftMeta as Record<string, unknown>)
+            : {};
+
+    await updateAnalysis({
+        analysisId: latestDraft.id,
+        userId: input.userId,
+        draftPrompts: remaining,
+        analysisData: {
+            ...existingAnalysisData,
+            status: 'prompt_draft',
+            promptDraftMeta: {
+                ...existingPromptMeta,
+                updatedAt: new Date().toISOString(),
+                removedForRun: runPromptList.length,
+            },
+        },
+    });
+}
 
 export async function analyzeHandler(req: Request, res: Response): Promise<void> {
+    logMethodEntry('analyze.analyzeHandler');
     const userId: string = res.locals.user.id;
 
-    // ── 1. Credit check ───────────────────────────────────────
-    try {
-        await checkCredits(userId, CREDITS_PER_BRAND_ANALYSIS, '[Analyze]');
-    } catch (err) {
-        handleApiError(err, res);
-        return;
-    }
-
-    // ── 2. Parse & validate body ──────────────────────────────
     const {
         company: rawCompany,
         prompts,
@@ -61,7 +131,36 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
         return;
     }
 
-    // ── 3. Enrich company with stored location (if available) ─
+    const providedPromptCount = Array.isArray(prompts)
+        ? prompts.filter((p) => typeof p?.prompt === 'string' && p.prompt.trim()).length
+        : 0;
+    const estimatedPromptCount = providedPromptCount > 0 ? providedPromptCount : 5;
+    const estimatedRunCredits = estimateFeatureCost('prompt_run', estimatedPromptCount);
+
+    try {
+        await checkCredits(userId, estimatedRunCredits, '[Analyze]');
+    } catch (err) {
+        handleApiError(err, res);
+        return;
+    }
+
+    let reservationId = '';
+    try {
+        const reservation = await reserveFeatureCredits({
+            userId,
+            featureCode: 'prompt_run',
+            quantity: estimatedPromptCount,
+            referenceType: 'analysis',
+            referenceId: rawCompany.id ? String(rawCompany.id) : undefined,
+            metadata: { estimatedRunCredits, estimatedPromptCount },
+            logTag: '[Analyze]',
+        });
+        reservationId = reservation.reservationId;
+    } catch (err) {
+        handleApiError(err, res);
+        return;
+    }
+
     const company = { ...rawCompany } as Company;
     let baseQuery: string | undefined;
     let personas: Persona[] | undefined;
@@ -107,53 +206,51 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
                 if (audience?.icp && typeof audience.icp === 'object') {
                     icp = audience.icp as IdealCustomerProfile;
                 }
+
+                await removeRunningPromptsFromDraft({
+                    userId,
+                    brandId,
+                    runPrompts: prompts,
+                }).catch((error) => {
+                    console.warn('[Analyze] Failed to sync draft prompts before run:', error);
+                });
             }
         }
     }
 
-    // ── 4. Track credits ──────────────────────────────────────
-    try {
-        await trackCredits(userId, CREDITS_PER_BRAND_ANALYSIS, '[Analyze]');
-    } catch (err) {
-        handleApiError(err, res);
-        return;
-    }
-
-    // ── 5. Get remaining balance (informational) ──────────────
     const remainingCredits = await getRemainingCredits(userId, '[Analyze]');
 
-    // ── 6. Configure SSE headers ──────────────────────────────
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no'); // nginx: disable buffering
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    // ── 7. SSE sender ─────────────────────────────────────────
     const sendEvent = async (event: SSEEvent): Promise<void> => {
         const data = createSSEMessage(event);
-        // res.write returns false when the client has disconnected
         const ok = res.write(data);
         if (!ok) {
-            // Back-pressure: wait for drain
             await new Promise<void>((resolve) => res.once('drain', resolve));
         }
     };
 
-    // ── 8. Async pipeline (non-blocking) ─────────────────────
     (async () => {
+        let deductedRunCredits = 0;
+        const runStartedAt = new Date();
         try {
             let analysisId: string | undefined;
 
-            // Send initial credit information
             await sendEvent({
                 type: 'credits',
                 stage: 'credits',
-                data: { remainingCredits, creditsUsed: CREDITS_PER_BRAND_ANALYSIS },
+                data: {
+                    remainingCredits,
+                    estimatedRunCredits,
+                    perPromptRunCost: getFeatureUnitCost('prompt_run'),
+                },
                 timestamp: new Date(),
             });
 
-            // Run the full analysis pipeline
             const analysisResult = await performAnalysis({
                 company,
                 prompts,
@@ -182,7 +279,7 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
                         analysisData: draftAnalysisData,
                         competitors,
                         prompts: generatedPrompts,
-                        creditsUsed: CREDITS_PER_BRAND_ANALYSIS,
+                        creditsUsed: 0,
                     });
                     analysisId = row.id;
                 },
@@ -204,6 +301,19 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
                         },
                     });
                 },
+                onPromptCompleted: async ({ prompt }) => {
+                    await captureFeatureCredits({
+                        userId,
+                        reservationId,
+                        featureCode: 'prompt_run',
+                        quantity: 1,
+                        referenceType: 'prompt',
+                        referenceId: prompt.id,
+                        metadata: { promptId: prompt.id, prompt: prompt.prompt },
+                        logTag: '[Analyze]',
+                    });
+                    deductedRunCredits = Number((deductedRunCredits + getFeatureUnitCost('prompt_run')).toFixed(2));
+                },
                 sendEvent,
             });
 
@@ -218,12 +328,13 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
                     analysisData: {
                         ...analysisResult,
                         status: 'completed',
+                        creditsUsed: deductedRunCredits,
                         completedAt: new Date().toISOString(),
                     },
+                    creditsUsed: deductedRunCredits,
                 });
             }
 
-            // Emit completion event
             await sendEvent({
                 type: 'complete',
                 stage: 'finalizing',
@@ -241,14 +352,26 @@ export async function analyzeHandler(req: Request, res: Response): Promise<void>
                     timestamp: new Date(),
                 });
             } catch {
-                // Client already gone — nothing we can do
+                // client disconnected
             }
         } finally {
+            if (reservationId) {
+                await reconcileReservationAfterError({
+                    userId,
+                    reservationId,
+                    startedAt: runStartedAt,
+                    logTag: '[Analyze]',
+                    referenceType: 'analysis',
+                    referenceId: company?.id,
+                    metadata: { deductedRunCredits },
+                }).catch((reverseError) => {
+                    console.error('[Analyze] Failed to reconcile leftover reserved credits:', reverseError);
+                });
+            }
             res.end();
         }
     })();
 
-    // Handle client disconnect
     req.on('close', () => {
         console.log('[Analyze] Client disconnected');
         res.end();

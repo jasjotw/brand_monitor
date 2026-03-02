@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { ArrowUpRight, ArrowDownRight, Minus, Search, Target, Users, TrendingUp } from "lucide-react";
 import { useAnalyticsSection } from "@/lib/services/dashboard-analytics";
@@ -39,12 +41,14 @@ function CustomTooltip({ active, payload, label }: any) {
 
 export function CompetitorsPage() {
   const { data, error, refresh } = useAnalyticsSection<any>("competitors");
+  const searchParams = useSearchParams();
+  const globalQuery = (searchParams.get("q") || "").trim().toLowerCase();
   const competitorsData = Array.isArray(data?.competitors) && data.competitors.length > 0
     ? data.competitors.map((c: any, index: number) => ({
         name: c.isOwn ? "Your Brand" : c.name,
         visibility: Number(c.visibility ?? 0),
         mentions: Number(c.mentions ?? 0),
-        citations: Number(c.shareOfVoice ?? 0),
+        shareOfVoice: Number(c.shareOfVoice ?? 0),
         sentiment: Number(c.sentiment ?? 50),
         avgPos: Number(c.avgPos ?? 0),
         change: Number(c.change ?? 0),
@@ -52,11 +56,19 @@ export function CompetitorsPage() {
         isOwn: Boolean(c.isOwn),
       }))
     : [];
-  const own = competitorsData.find((c: any) => c.isOwn);
-  const top = competitorsData.find((c: any) => !c.isOwn);
+  const filteredCompetitorsData = useMemo(
+    () =>
+      competitorsData.filter((c: any) => {
+        const haystack = `${c.name} ${c.visibility} ${c.mentions} ${c.shareOfVoice}`.toLowerCase();
+        return !globalQuery || haystack.includes(globalQuery);
+      }),
+    [competitorsData, globalQuery]
+  );
+  const own = filteredCompetitorsData.find((c: any) => c.isOwn);
+  const top = filteredCompetitorsData.find((c: any) => !c.isOwn);
   const summary = data?.summary || {};
 
-  const radarFromData = competitorsData.slice(0, 4);
+  const radarFromData = filteredCompetitorsData.slice(0, 4);
   const radarLabels = ["Visibility", "Mentions", "Sentiment", "Position", "Coverage"];
   const dynamicRadarData = radarLabels.map((metric) => {
     const row: any = { metric };
@@ -65,7 +77,7 @@ export function CompetitorsPage() {
       if (metric === "Mentions") row[c.name] = Math.min(100, c.mentions);
       if (metric === "Sentiment") row[c.name] = c.sentiment;
       if (metric === "Position") row[c.name] = Math.max(0, 100 - c.avgPos * 10);
-      if (metric === "Coverage") row[c.name] = c.citations;
+      if (metric === "Coverage") row[c.name] = c.shareOfVoice;
     });
     return row;
   });
@@ -81,10 +93,10 @@ export function CompetitorsPage() {
       {/* Stats row */}
       <div className="grid grid-cols-4 gap-4">
         {[
-          { label: "Tracked Competitors", value: String(summary.trackedCompetitors ?? Math.max(0, competitorsData.length - 1)), icon: <Users size={16} strokeWidth={1.5} /> },
+          { label: "Tracked Competitors", value: String(summary.trackedCompetitors ?? Math.max(0, filteredCompetitorsData.length - 1)), icon: <Users size={16} strokeWidth={1.5} /> },
           { label: "Your Rank", value: summary.yourRank ? `#${summary.yourRank}` : "-", change: 0, icon: <TrendingUp size={16} strokeWidth={1.5} /> },
           { label: "Visibility Gap", value: `${Math.round(Number(summary.visibilityGap ?? (own && top ? own.visibility - top.visibility : 0)))}pts`, icon: <Target size={16} strokeWidth={1.5} /> },
-          { label: "Compared Brands", value: String(competitorsData.length), icon: <Search size={16} strokeWidth={1.5} /> },
+          { label: "Compared Brands", value: String(filteredCompetitorsData.length), icon: <Search size={16} strokeWidth={1.5} /> },
         ].map((stat) => (
           <div key={stat.label} className="card-hover flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/8 text-primary">
@@ -147,7 +159,7 @@ export function CompetitorsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  {["Brand", "Visibility", "Mentions", "Citations", "Sentiment", "Avg Pos.", "7d Change"].map((h) => (
+                  {["Brand", "Visibility", "Mentions", "Share of Voice", "Sentiment", "Avg Pos.", "7d Change"].map((h) => (
                     <th key={h} className="pb-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground first:pr-4 last:text-right">
                       {h}
                     </th>
@@ -155,11 +167,11 @@ export function CompetitorsPage() {
                 </tr>
               </thead>
               <tbody>
-                {competitorsData.length === 0 ? (
+                {filteredCompetitorsData.length === 0 ? (
                   <tr>
                     <td className="py-6 text-xs text-muted-foreground" colSpan={7}>No competitor data yet.</td>
                   </tr>
-                ) : competitorsData.map((c: any) => (
+                ) : filteredCompetitorsData.map((c: any) => (
                   <tr key={c.name} className={cn("border-b border-border/50 last:border-0 hover:bg-secondary/30", c.name === "Your Brand" && "bg-primary/[0.03]")}>
                     <td className="py-3 pr-4">
                       <div className="flex items-center gap-2">
@@ -177,7 +189,7 @@ export function CompetitorsPage() {
                       </div>
                     </td>
                     <td className="py-3 font-mono text-xs">{c.mentions.toLocaleString()}</td>
-                    <td className="py-3 font-mono text-xs">{Math.round(c.citations).toLocaleString()}</td>
+                    <td className="py-3 font-mono text-xs">{`${Math.round(c.shareOfVoice)}%`}</td>
                     <td className="py-3">
                       <span className={cn("text-xs font-medium", c.sentiment >= 70 ? "text-success" : "text-warning")}>{c.sentiment}%</span>
                     </td>

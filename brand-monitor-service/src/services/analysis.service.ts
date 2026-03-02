@@ -39,6 +39,7 @@ import {
     analyzeCompetitorsByProvider,
 } from './ai.service';
 import { calculateBrandScores, BrandScores } from '../utils/scoring.utils';
+import { logMethodEntry } from '../utils/logger';
 
 // ── Interfaces ────────────────────────────────────────────────
 
@@ -67,6 +68,12 @@ export interface AnalysisConfig {
         company: Company;
         competitors: string[];
     }) => Promise<void> | void;
+    onPromptCompleted?: (payload: {
+        prompt: BrandPrompt;
+        promptIndex: number;
+        company: Company;
+        competitors: string[];
+    }) => Promise<void> | void;
     sendEvent: (event: SSEEvent) => Promise<void>;
 }
 
@@ -92,6 +99,99 @@ export interface AIProvider {
     icon?: string;
 }
 
+type ProviderRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+type PromptRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'partial_failed';
+
+interface PromptRunStateItem {
+    promptId: string;
+    prompt: string;
+    promptIndex: number;
+    totalProviders: number;
+    runningProviders: number;
+    completedProviders: number;
+    failedProviders: number;
+    status: PromptRunStatus;
+    providers: Record<string, ProviderRunStatus>;
+}
+
+interface PromptRunStateSnapshot {
+    totalPrompts: number;
+    pendingPrompts: number;
+    runningPrompts: number;
+    completedPrompts: number;
+    failedPrompts: number;
+    prompts: PromptRunStateItem[];
+}
+
+function createPromptRunTracker(prompts: BrandPrompt[], providers: AIProvider[]) {
+    const byPromptId = new Map<string, PromptRunStateItem>();
+    const providerNames = providers.map((p) => p.name);
+
+    prompts.forEach((prompt, index) => {
+        const providersState: Record<string, ProviderRunStatus> = {};
+        providerNames.forEach((name) => {
+            providersState[name] = 'pending';
+        });
+        byPromptId.set(prompt.id || `prompt-${index + 1}`, {
+            promptId: prompt.id || `prompt-${index + 1}`,
+            prompt: prompt.prompt,
+            promptIndex: index + 1,
+            totalProviders: providers.length,
+            runningProviders: 0,
+            completedProviders: 0,
+            failedProviders: 0,
+            status: 'pending',
+            providers: providersState,
+        });
+    });
+
+    const recompute = (row: PromptRunStateItem) => {
+        const statuses = Object.values(row.providers);
+        row.runningProviders = statuses.filter((s) => s === 'running').length;
+        row.completedProviders = statuses.filter((s) => s === 'completed').length;
+        row.failedProviders = statuses.filter((s) => s === 'failed').length;
+
+        if (row.completedProviders === row.totalProviders) {
+            row.status = 'completed';
+            return;
+        }
+        if (row.failedProviders === row.totalProviders) {
+            row.status = 'failed';
+            return;
+        }
+        if (row.runningProviders > 0) {
+            row.status = 'running';
+            return;
+        }
+        if (row.failedProviders > 0 && row.completedProviders > 0) {
+            row.status = 'partial_failed';
+            return;
+        }
+        row.status = 'pending';
+    };
+
+    const mark = (promptId: string, providerName: string, state: ProviderRunStatus) => {
+        const row = byPromptId.get(promptId);
+        if (!row) return;
+        row.providers[providerName] = state;
+        recompute(row);
+    };
+
+    const snapshot = (): PromptRunStateSnapshot => {
+        const promptsList = Array.from(byPromptId.values()).sort((a, b) => a.promptIndex - b.promptIndex);
+        return {
+            totalPrompts: promptsList.length,
+            pendingPrompts: promptsList.filter((p) => p.status === 'pending').length,
+            runningPrompts: promptsList.filter((p) => p.status === 'running').length,
+            completedPrompts: promptsList.filter((p) => p.status === 'completed').length,
+            failedPrompts: promptsList.filter((p) => p.status === 'failed' || p.status === 'partial_failed').length,
+            prompts: promptsList,
+        };
+    };
+
+    return { mark, snapshot };
+}
+
 // ── Provider Helper ───────────────────────────────────────────
 
 /** Returns available providers in the same shape expected by the loop. */
@@ -115,8 +215,14 @@ export async function performAnalysis({
     useWebSearch = false,
     onPromptsReady,
     onResponseReady,
+    onPromptCompleted,
     sendEvent,
 }: AnalysisConfig): Promise<AnalysisResult> {
+    logMethodEntry('analysisService.performAnalysis', {
+        companyName: company?.name,
+        promptsProvided: Array.isArray(prompts) ? prompts.length : 0,
+        useWebSearch,
+    });
     const intentFromCategory = (category?: string): IntentLayer => {
         const key = (category || '').toLowerCase();
         if (key === 'organic_discovery') return 'organic_discovery';
@@ -284,134 +390,97 @@ export async function performAnalysis({
     const errors: string[] = [];
     const availableProviders = getAvailableProviders();
     const useMockMode = process.env.USE_MOCK_MODE === 'true' || availableProviders.length === 0;
+    const promptRunTracker = createPromptRunTracker(analysisPrompts, availableProviders);
 
     console.log(`[Analysis] Available providers: ${availableProviders.map((p) => p.name).join(', ')}`);
     console.log(`[Analysis] Mock mode: ${useMockMode}`);
 
     const totalAnalyses = analysisPrompts.length * availableProviders.length;
     let completedAnalyses = 0;
+    const pendingPromptIds = analysisPrompts.map((prompt) => prompt.id);
+    let runningPromptId: string | null = null;
+    const completedPromptIds: string[] = [];
+    const failedPromptIds: string[] = [];
 
-    const BATCH_SIZE = 3;
+    const queueSnapshot = () => ({
+        pendingPromptIds: [...pendingPromptIds],
+        runningPromptId,
+        completedPromptIds: [...completedPromptIds],
+        failedPromptIds: [...failedPromptIds],
+        nextPromptId: pendingPromptIds[0] ?? null,
+        lastCompletedPromptId:
+            completedPromptIds.length > 0 ? completedPromptIds[completedPromptIds.length - 1] : null,
+        pendingCount: pendingPromptIds.length,
+        completedCount: completedPromptIds.length,
+        failedCount: failedPromptIds.length,
+        totalPrompts: analysisPrompts.length,
+    });
 
-    for (let batchStart = 0; batchStart < analysisPrompts.length; batchStart += BATCH_SIZE) {
-        const batchEnd = Math.min(batchStart + BATCH_SIZE, analysisPrompts.length);
-        const batchPrompts = analysisPrompts.slice(batchStart, batchEnd);
+    for (let promptIndex = 0; promptIndex < analysisPrompts.length; promptIndex += 1) {
+        const prompt = analysisPrompts[promptIndex];
 
-        const batchPromises = batchPrompts.flatMap((prompt, batchIndex) =>
-            availableProviders.map(async (provider) => {
-                const promptIndex = batchStart + batchIndex;
+        pendingPromptIds.shift();
+        runningPromptId = prompt.id;
 
-                await sendEvent({
-                    type: 'analysis-start',
-                    stage: 'analyzing-prompts',
-                    data: {
-                        provider: provider.name,
-                        prompt: prompt.prompt,
-                        promptIndex: promptIndex + 1,
-                        totalPrompts: analysisPrompts.length,
-                        providerIndex: 0,
-                        totalProviders: availableProviders.length,
-                        status: 'started',
-                    } as AnalysisProgressData,
-                    timestamp: new Date(),
-                });
+        await sendEvent({
+            type: 'prompt-dequeued',
+            stage: 'analyzing-prompts',
+            data: {
+                promptId: prompt.id,
+                prompt: prompt.prompt,
+                promptIndex: promptIndex + 1,
+                totalPrompts: analysisPrompts.length,
+                queueState: queueSnapshot(),
+                promptRunState: promptRunTracker.snapshot(),
+            },
+            timestamp: new Date(),
+        });
 
-                try {
-                    let response: AIResponse | null;
-                    if (useWebSearch) {
-                        response = await analyzePromptWithProviderEnhanced(
-                            prompt.prompt,
-                            provider.name,
-                            company.name,
-                            competitors,
-                            useMockMode,
-                            true,
-                            detectionContext,
-                        );
-                    } else {
-                        response = await analyzePromptWithProvider(
-                            prompt.prompt,
-                            provider.name,
-                            company.name,
-                            competitors,
-                            useMockMode,
-                            detectionContext,
-                        );
-                    }
+        const providerPromises = availableProviders.map(async (provider) => {
+            promptRunTracker.mark(prompt.id, provider.name, 'running');
 
-                    if (response === null) {
-                        await sendEvent({
-                            type: 'analysis-complete',
-                            stage: 'analyzing-prompts',
-                            data: {
-                                provider: provider.name,
-                                prompt: prompt.prompt,
-                                promptIndex: promptIndex + 1,
-                                totalPrompts: analysisPrompts.length,
-                                providerIndex: 0,
-                                totalProviders: availableProviders.length,
-                                status: 'failed',
-                            } as AnalysisProgressData,
-                            timestamp: new Date(),
-                        });
-                        return;
-                    }
+            await sendEvent({
+                type: 'analysis-start',
+                stage: 'analyzing-prompts',
+                data: {
+                    provider: provider.name,
+                    prompt: prompt.prompt,
+                    promptIndex: promptIndex + 1,
+                    totalPrompts: analysisPrompts.length,
+                    providerIndex: 0,
+                    totalProviders: availableProviders.length,
+                    status: 'started',
+                    queueState: queueSnapshot(),
+                    promptRunState: promptRunTracker.snapshot(),
+                } as AnalysisProgressData,
+                timestamp: new Date(),
+            });
 
-                    if (useMockMode) await new Promise((r) => setTimeout(r, Math.random() * 1000 + 500));
+            try {
+                let response: AIResponse | null;
+                if (useWebSearch) {
+                    response = await analyzePromptWithProviderEnhanced(
+                        prompt.prompt,
+                        provider.name,
+                        company.name,
+                        competitors,
+                        useMockMode,
+                        true,
+                        detectionContext,
+                    );
+                } else {
+                    response = await analyzePromptWithProvider(
+                        prompt.prompt,
+                        provider.name,
+                        company.name,
+                        competitors,
+                        useMockMode,
+                        detectionContext,
+                    );
+                }
 
-                    const enrichedResponse: AIResponse = {
-                        ...response,
-                        promptId: prompt.id,
-                        intentLayer: intentFromCategory(prompt.category),
-                        promptSeededBrand: prompt.prompt.toLowerCase().includes(company.name.toLowerCase()),
-                    };
-
-                    responses.push(enrichedResponse);
-
-                    if (onResponseReady) {
-                        await onResponseReady({
-                            response: enrichedResponse,
-                            responses: [...responses],
-                            prompt,
-                            company,
-                            competitors,
-                        });
-                    }
-
-                    await sendEvent({
-                        type: 'partial-result',
-                        stage: 'analyzing-prompts',
-                        data: {
-                            provider: provider.name,
-                            prompt: prompt.prompt,
-                            response: {
-                                provider: enrichedResponse.provider,
-                                brandMentioned: enrichedResponse.brandMentioned,
-                                brandPosition: enrichedResponse.brandPosition,
-                                sentiment: enrichedResponse.sentiment,
-                            },
-                        } as PartialResultData,
-                        timestamp: new Date(),
-                    });
-
-                    await sendEvent({
-                        type: 'analysis-complete',
-                        stage: 'analyzing-prompts',
-                        data: {
-                            provider: provider.name,
-                            prompt: prompt.prompt,
-                            promptIndex: promptIndex + 1,
-                            totalPrompts: analysisPrompts.length,
-                            providerIndex: 0,
-                            totalProviders: availableProviders.length,
-                            status: 'completed',
-                        } as AnalysisProgressData,
-                        timestamp: new Date(),
-                    });
-                } catch (error) {
-                    console.error(`[Analysis] Error with ${provider.name} for prompt "${prompt.prompt}":`, error);
-                    errors.push(`${provider.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-
+                if (response === null) {
+                    promptRunTracker.mark(prompt.id, provider.name, 'failed');
                     await sendEvent({
                         type: 'analysis-complete',
                         stage: 'analyzing-prompts',
@@ -423,28 +492,151 @@ export async function performAnalysis({
                             providerIndex: 0,
                             totalProviders: availableProviders.length,
                             status: 'failed',
+                            queueState: queueSnapshot(),
+                            promptRunState: promptRunTracker.snapshot(),
                         } as AnalysisProgressData,
                         timestamp: new Date(),
                     });
+                    return;
                 }
 
-                completedAnalyses++;
+                if (useMockMode) await new Promise((r) => setTimeout(r, Math.random() * 1000 + 500));
+
+                const enrichedResponse: AIResponse = {
+                    ...response,
+                    promptId: prompt.id,
+                    intentLayer: intentFromCategory(prompt.category),
+                    promptSeededBrand: prompt.prompt.toLowerCase().includes(company.name.toLowerCase()),
+                };
+
+                responses.push(enrichedResponse);
+                promptRunTracker.mark(prompt.id, provider.name, 'completed');
+
+                if (onResponseReady) {
+                    await onResponseReady({
+                        response: enrichedResponse,
+                        responses: [...responses],
+                        prompt,
+                        company,
+                        competitors,
+                    });
+                }
+
+                await sendEvent({
+                    type: 'partial-result',
+                    stage: 'analyzing-prompts',
+                    data: {
+                        provider: provider.name,
+                        prompt: prompt.prompt,
+                        response: {
+                            provider: enrichedResponse.provider,
+                            brandMentioned: enrichedResponse.brandMentioned,
+                            brandPosition: enrichedResponse.brandPosition,
+                            sentiment: enrichedResponse.sentiment,
+                        },
+                    } as PartialResultData,
+                    timestamp: new Date(),
+                });
+
+                await sendEvent({
+                    type: 'analysis-complete',
+                    stage: 'analyzing-prompts',
+                    data: {
+                        provider: provider.name,
+                        prompt: prompt.prompt,
+                        promptIndex: promptIndex + 1,
+                        totalPrompts: analysisPrompts.length,
+                        providerIndex: 0,
+                        totalProviders: availableProviders.length,
+                        status: 'completed',
+                        queueState: queueSnapshot(),
+                        promptRunState: promptRunTracker.snapshot(),
+                    } as AnalysisProgressData,
+                    timestamp: new Date(),
+                });
+            } catch (error) {
+                console.error(`[Analysis] Error with ${provider.name} for prompt "${prompt.prompt}":`, error);
+                errors.push(`${provider.name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                promptRunTracker.mark(prompt.id, provider.name, 'failed');
+
+                await sendEvent({
+                    type: 'analysis-complete',
+                    stage: 'analyzing-prompts',
+                    data: {
+                        provider: provider.name,
+                        prompt: prompt.prompt,
+                        promptIndex: promptIndex + 1,
+                        totalPrompts: analysisPrompts.length,
+                        providerIndex: 0,
+                        totalProviders: availableProviders.length,
+                        status: 'failed',
+                        queueState: queueSnapshot(),
+                        promptRunState: promptRunTracker.snapshot(),
+                    } as AnalysisProgressData,
+                    timestamp: new Date(),
+                });
+            } finally {
+                completedAnalyses += 1;
                 const progress = Math.round((completedAnalyses / totalAnalyses) * 100);
                 await sendEvent({
                     type: 'progress',
                     stage: 'analyzing-prompts',
-                    data: { stage: 'analyzing-prompts', progress, message: `Completed ${completedAnalyses} of ${totalAnalyses} analyses` } as ProgressData,
+                    data: {
+                        stage: 'analyzing-prompts',
+                        progress,
+                        message: `Completed ${completedAnalyses} of ${totalAnalyses} analyses`,
+                        queueState: queueSnapshot(),
+                        promptRunState: promptRunTracker.snapshot(),
+                    } as ProgressData,
                     timestamp: new Date(),
                 });
-            }),
-        );
+            }
+        });
 
-        await Promise.all(batchPromises);
+        await Promise.all(providerPromises);
 
-        if (batchEnd < analysisPrompts.length) {
-            console.log('[Analysis] Cooldown: waiting 30 seconds before next batch...');
-            await new Promise((r) => setTimeout(r, 30000));
+        const promptState = promptRunTracker.snapshot().prompts.find((p) => p.promptId === prompt.id);
+        const promptFailed = promptState?.status === 'failed' || promptState?.status === 'partial_failed';
+        if (promptFailed) {
+            failedPromptIds.push(prompt.id);
+            await sendEvent({
+                type: 'prompt-failed',
+                stage: 'analyzing-prompts',
+                data: {
+                    promptId: prompt.id,
+                    prompt: prompt.prompt,
+                    promptIndex: promptIndex + 1,
+                    totalPrompts: analysisPrompts.length,
+                    queueState: queueSnapshot(),
+                    promptRunState: promptRunTracker.snapshot(),
+                },
+                timestamp: new Date(),
+            });
+        } else {
+            completedPromptIds.push(prompt.id);
+            if (onPromptCompleted) {
+                await onPromptCompleted({
+                    prompt,
+                    promptIndex: promptIndex + 1,
+                    company,
+                    competitors,
+                });
+            }
+            await sendEvent({
+                type: 'prompt-complete',
+                stage: 'analyzing-prompts',
+                data: {
+                    promptId: prompt.id,
+                    prompt: prompt.prompt,
+                    promptIndex: promptIndex + 1,
+                    totalPrompts: analysisPrompts.length,
+                    queueState: queueSnapshot(),
+                    promptRunState: promptRunTracker.snapshot(),
+                },
+                timestamp: new Date(),
+            });
         }
+        runningPromptId = null;
     }
 
     // ── 4. Calculate Scores ───────────────────────────────────

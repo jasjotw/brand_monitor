@@ -224,6 +224,9 @@ export type SSEEventType =
     | 'stage'
     | 'competitor-found'
     | 'prompt-generated'
+    | 'prompt-dequeued'
+    | 'prompt-complete'
+    | 'prompt-failed'
     | 'analysis-start'
     | 'analysis-progress'
     | 'analysis-complete'
@@ -273,6 +276,8 @@ export interface AnalysisProgressData {
     providerIndex: number;
     totalProviders: number;
     status: 'started' | 'completed' | 'failed';
+    queueState?: unknown;
+    promptRunState?: unknown;
 }
 
 export interface PartialResultData {

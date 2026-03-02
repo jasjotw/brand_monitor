@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { clearAuthToken, getAuthToken } from "@/lib/auth";
 import {
@@ -342,6 +342,8 @@ function OpportunityGroup({ item, onLinkClick }: { item: BacklinkOpportunity; on
 }
 
 export function BacklinksPage() {
+  const searchParams = useSearchParams();
+  const globalQuery = (searchParams.get("q") || "").trim().toLowerCase();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [activeCompId, setActiveCompId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -431,28 +433,50 @@ export function BacklinksPage() {
     loadCurrentBacklinks();
   }, [loadCurrentBacklinks]);
 
+  const filteredCompetitors = useMemo(() => {
+    if (!payload) return [];
+    return payload.competitors.filter((comp) => {
+      const detail = payload.details?.[comp.id];
+      const domainText = detail?.opportunities?.map((o) => o.domain).join(" ") || "";
+      const haystack = `${comp.name} ${comp.url} ${domainText}`.toLowerCase();
+      return !globalQuery || haystack.includes(globalQuery);
+    });
+  }, [globalQuery, payload]);
+
   useEffect(() => {
-    if (!payload || payload.competitors.length === 0) {
+    if (!payload || filteredCompetitors.length === 0) {
       setActiveCompId(null);
       return;
     }
-    if (!activeCompId || !payload.competitors.some((c) => c.id === activeCompId)) {
-      setActiveCompId(payload.competitors[0].id);
+    if (!activeCompId || !filteredCompetitors.some((c) => c.id === activeCompId)) {
+      setActiveCompId(filteredCompetitors[0].id);
     }
-  }, [payload, activeCompId]);
+  }, [payload, activeCompId, filteredCompetitors]);
 
   const summaryMetrics = useMemo(() => ([
-    { label: "Competitors", value: String(payload?.summary.competitors ?? 0), icon: <Users size={16} /> },
+    { label: "Competitors", value: String(filteredCompetitors.length), icon: <Users size={16} /> },
     { label: "Total Backlinks", value: compact(payload?.summary.totalBacklinks ?? 0), icon: <LinkIcon size={16} /> },
     { label: "Avg. Ref. Domains", value: withCommas(payload?.summary.avgRefDomains ?? 0), icon: <Network size={16} /> },
-  ]), [payload]);
+  ]), [filteredCompetitors.length, payload]);
 
   const activeComp = useMemo(() => {
-    if (!payload) return null;
-    return payload.competitors.find((c) => c.id === activeCompId) || payload.competitors[0] || null;
-  }, [payload, activeCompId]);
+    if (!filteredCompetitors.length) return null;
+    return filteredCompetitors.find((c) => c.id === activeCompId) || filteredCompetitors[0] || null;
+  }, [filteredCompetitors, activeCompId]);
 
-  const activeDetail = activeComp ? payload?.details?.[activeComp.id] : undefined;
+  const activeDetailRaw = activeComp ? payload?.details?.[activeComp.id] : undefined;
+  const activeDetail = useMemo(() => {
+    if (!activeDetailRaw) return undefined;
+    if (!globalQuery) return activeDetailRaw;
+    return {
+      ...activeDetailRaw,
+      opportunities: activeDetailRaw.opportunities.filter((opportunity) => {
+        const linksText = opportunity.links.map((l) => `${l.title} ${l.url}`).join(" ");
+        const haystack = `${opportunity.domain} ${linksText}`.toLowerCase();
+        return haystack.includes(globalQuery);
+      }),
+    };
+  }, [activeDetailRaw, globalQuery]);
   const displayMetrics = activeDetail ? metricList(activeDetail.metrics) : [];
 
   return (
@@ -476,8 +500,13 @@ export function BacklinksPage() {
             No backlink data available yet. Add a brand and competitors to generate backlink insights.
           </div>
         ) : null}
+        {!loading && payload && payload.competitors.length > 0 && filteredCompetitors.length === 0 ? (
+          <div className="rounded-xl border border-border bg-card p-4 text-xs text-muted-foreground">
+            No backlink records match current top-bar filters.
+          </div>
+        ) : null}
 
-        {!loading && payload && payload.competitors.length > 0 ? (
+        {!loading && payload && filteredCompetitors.length > 0 ? (
           <div className="flex items-center justify-between rounded-xl border border-border bg-card px-4 py-3">
             <div className="text-xs text-muted-foreground">
               {payload.hasSnapshot ? "Backlinks loaded from saved analysis." : "Competitors are preloaded. Click Fetch Backlinks to run DataForSEO now."}
@@ -516,7 +545,7 @@ export function BacklinksPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {(payload?.competitors || []).map((comp) => (
+            {filteredCompetitors.map((comp) => (
               <button
                 key={comp.id}
                 onClick={() => setActiveCompId(comp.id)}
@@ -602,7 +631,7 @@ export function BacklinksPage() {
               </div>
             </motion.div>
           </AnimatePresence>
-        ) : !loading && payload?.competitors.length ? (
+        ) : !loading && filteredCompetitors.length ? (
           <div className="rounded-xl border border-border bg-card p-4 text-xs text-muted-foreground">
             No fetched backlink metrics yet. Click <span className="font-semibold text-foreground">Fetch Backlinks</span> to load and display details.
           </div>

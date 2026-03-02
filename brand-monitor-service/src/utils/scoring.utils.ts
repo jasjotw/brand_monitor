@@ -13,6 +13,12 @@ import {
     ParsedResponseSignal,
     IntentScoreRecord,
 } from '../types';
+import { logInfo, logWarn } from './logger';
+
+function estimateTokensFromText(value: string): number {
+    if (!value) return 0;
+    return Math.ceil(value.length / 4);
+}
 
 export interface BrandScores {
     visibilityScore: number;
@@ -107,6 +113,14 @@ function lexicalSimilarity(a: string, b: string): number {
 async function fetchEmbedding(text: string): Promise<number[] | null> {
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) return null;
+    const started = Date.now();
+    logInfo('LLM_CALL_START', {
+        operation: 'fetchEmbedding',
+        provider: 'openrouter',
+        model: 'openai/text-embedding-3-small',
+        inputChars: text.length,
+        estimatedInputTokens: estimateTokensFromText(text),
+    });
     try {
         const response = await fetch('https://openrouter.ai/api/v1/embeddings', {
             method: 'POST',
@@ -119,11 +133,33 @@ async function fetchEmbedding(text: string): Promise<number[] | null> {
                 input: text.slice(0, 8000),
             }),
         });
-        if (!response.ok) return null;
+        if (!response.ok) {
+            logWarn('LLM_CALL_FAIL', {
+                operation: 'fetchEmbedding',
+                provider: 'openrouter',
+                model: 'openai/text-embedding-3-small',
+                durationMs: Date.now() - started,
+                status: response.status,
+            });
+            return null;
+        }
         const json = (await response.json()) as any;
         const vector = json?.data?.[0]?.embedding;
+        logInfo('LLM_CALL_SUCCESS', {
+            operation: 'fetchEmbedding',
+            provider: 'openrouter',
+            model: 'openai/text-embedding-3-small',
+            durationMs: Date.now() - started,
+            vectorLength: Array.isArray(vector) ? vector.length : 0,
+        });
         return Array.isArray(vector) ? vector : null;
     } catch {
+        logWarn('LLM_CALL_FAIL', {
+            operation: 'fetchEmbedding',
+            provider: 'openrouter',
+            model: 'openai/text-embedding-3-small',
+            durationMs: Date.now() - started,
+        });
         return null;
     }
 }
@@ -281,7 +317,7 @@ export async function calculateBrandScores(
     );
     const visibilityRaw = visibilitySignals.length > 0
         ? visibilitySignals.reduce(
-            (sum, s) => sum + (s.explicitMention * 1.0 + s.implicitMention * 0.5 + s.rankingScore * 0.5),
+            (sum, s) => sum + (s.explicitMention * 0.6 + s.rankingScore * 0.3 + s.implicitMention * 0.3),
             0,
         ) / visibilitySignals.length
         : 0;
@@ -385,7 +421,7 @@ export async function calculateBrandScores(
         if (intentLayer === 'organic_discovery' || intentLayer === 'category_authority' || intentLayer === 'conversational_recall') {
             const valid = signals.filter((s) => !(s.intentLayer === 'conversational_recall' && s.brandSeededInPrompt));
             const raw = valid.length > 0
-                ? (valid.reduce((sum, s) => sum + (s.explicitMention * 1 + s.implicitMention * 0.5 + s.rankingScore * 0.5), 0) / valid.length) * 100
+                ? (valid.reduce((sum, s) => sum + (s.explicitMention * 0.6 + s.rankingScore * 0.3 + s.implicitMention * 0.3), 0) / valid.length) * 100
                 : 0;
             makeRecord('visibility', raw, valid.length);
         }

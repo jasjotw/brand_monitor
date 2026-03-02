@@ -162,20 +162,9 @@ export default function AnalyzePersonasPage() {
     try {
       setContinuing(true);
       setError(null);
-      const res = await authedFetch("/api/brand-monitor/audience/generate-prompts", {
-        method: "POST",
-      });
-      if (!res) return;
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.error?.message || data?.error || "Failed to generate prompts.");
-      }
-      if (Array.isArray(data?.prompts)) {
-        localStorage.setItem("brand_monitor_generated_prompts", JSON.stringify(data.prompts));
-      }
       router.push("/dashboard/analyze/prompts");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate prompts.");
+      setError(err instanceof Error ? err.message : "Failed to continue to prompts.");
     } finally {
       setContinuing(false);
     }

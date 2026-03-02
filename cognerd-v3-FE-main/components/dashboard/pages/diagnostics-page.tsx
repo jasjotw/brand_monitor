@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useSearchParams } from "next/navigation";
 
 import { cn } from "@/lib/utils";
 import { Check, X, AlertTriangle, Wrench, Globe, FileCode, Zap, RefreshCw, ArrowRight } from "lucide-react";
@@ -63,8 +64,19 @@ const categoryIcons: Record<string, React.ReactNode> = {
 
 export function DiagnosticsPage() {
   const { data, loading, error, refresh } = useAnalyticsSection<DiagnosticsData>("diagnostics");
+  const searchParams = useSearchParams();
+  const globalQuery = (searchParams.get("q") || "").trim().toLowerCase();
 
-  const groups = Array.isArray(data?.groups) ? data.groups : [];
+  const groupsRaw = Array.isArray(data?.groups) ? data.groups : [];
+  const groups = groupsRaw
+    .map((group) => ({
+      ...group,
+      checks: group.checks.filter((check) => {
+        const haystack = `${group.category} ${check.label} ${check.detail} ${check.fix || ""}`.toLowerCase();
+        return !globalQuery || haystack.includes(globalQuery);
+      }),
+    }))
+    .filter((group) => group.checks.length > 0 || !globalQuery);
   const allChecks = groups.flatMap((g) => g.checks);
   const passed = data?.health?.passed ?? allChecks.filter((c) => c.status === "pass").length;
   const warnings = data?.health?.warnings ?? allChecks.filter((c) => c.status === "warning").length;

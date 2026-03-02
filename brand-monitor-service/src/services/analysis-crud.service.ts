@@ -62,6 +62,7 @@ export interface CreateAnalysisInput {
     companyName?: string;
     industry?: string;
     analysisData: unknown;
+    draftPrompts?: unknown;
     competitors?: unknown;
     prompts?: unknown;
     creditsUsed?: number;
@@ -72,10 +73,12 @@ export interface UpdateAnalysisInput {
     analysisId: string;
     userId: string;
     analysisData?: unknown;
+    draftPrompts?: unknown;
     competitors?: unknown;
     prompts?: unknown;
     companyName?: string;
     industry?: string;
+    creditsUsed?: number;
 }
 
 /**
@@ -106,9 +109,13 @@ export async function createAnalysis(input: CreateAnalysisInput): Promise<BrandA
                 companyName: input.companyName,
                 industry: input.industry,
                 analysisData: input.analysisData,
+                draftPrompts: input.draftPrompts,
                 competitors: input.competitors,
                 prompts: input.prompts,
-                creditsUsed: input.creditsUsed ?? 10,
+                creditsUsed:
+                    typeof input.creditsUsed === 'number'
+                        ? input.creditsUsed.toFixed(2)
+                        : '10.00',
             })
             .returning(),
     ) as BrandAnalysisRow[];
@@ -126,10 +133,15 @@ export async function updateAnalysis(input: UpdateAnalysisInput): Promise<BrandA
             .update(brandAnalyses)
             .set({
                 analysisData: input.analysisData,
+                draftPrompts: input.draftPrompts,
                 competitors: input.competitors,
                 prompts: input.prompts,
                 companyName: input.companyName,
                 industry: input.industry,
+                creditsUsed:
+                    typeof input.creditsUsed === 'number'
+                        ? input.creditsUsed.toFixed(2)
+                        : undefined,
                 updatedAt: new Date(),
             })
             .where(

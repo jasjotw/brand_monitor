@@ -17,6 +17,8 @@ import brandProfileRoutes from './routes/brand-profile.routes';
 import audienceRoutes from './routes/audience.routes';
 import analyticsRoutes from './routes/analytics.routes';
 import backlinksRoutes from './routes/backlinks.routes';
+import plansRoutes from './routes/plans.routes';
+import { requestLoggerMiddleware } from './middleware/request-logger.middleware';
 
 // Error handler (must be registered LAST)
 import { errorHandler } from './utils/errors';
@@ -53,6 +55,7 @@ export function createApp(): Application {
     // ── Body parsing ───────────────────────────────────────────
     app.use(express.json({ limit: '2mb' }));
     app.use(express.urlencoded({ extended: true }));
+    app.use(requestLoggerMiddleware);
 
     // ── Health check ───────────────────────────────────────────
     app.get('/health', (_req: Request, res: Response) => {
@@ -74,6 +77,7 @@ export function createApp(): Application {
     app.use('/api/brand-monitor/analyses', analysesRoutes);
     app.use('/api/brand-monitor/analytics', analyticsRoutes);
     app.use('/api/brand-monitor/backlinks', backlinksRoutes);
+    app.use('/api/brand-monitor/plans', plansRoutes);
 
     // ── 404 fallback ───────────────────────────────────────────
     app.use((_req: Request, res: Response) => {

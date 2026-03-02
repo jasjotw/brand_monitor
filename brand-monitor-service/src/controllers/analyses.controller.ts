@@ -20,6 +20,7 @@ import {
 } from '../services/analysis-crud.service';
 import { handleApiError, ValidationError } from '../utils/errors';
 import { isSuperuser } from '../middleware/auth.middleware';
+import { logMethodEntry } from '../utils/logger';
 
 // ── List ──────────────────────────────────────────────────────
 
@@ -32,6 +33,7 @@ import { isSuperuser } from '../middleware/auth.middleware';
  */
 export async function listAnalysesHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analyses.listAnalysesHandler');
         const user = res.locals.user;
         const admin = isSuperuser(user.email);
 
@@ -62,6 +64,7 @@ export async function listAnalysesHandler(req: Request, res: Response): Promise<
  */
 export async function createAnalysisHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analyses.createAnalysisHandler');
         const user = res.locals.user;
         const body = req.body as {
             url?: string;
@@ -112,6 +115,7 @@ export async function createAnalysisHandler(req: Request, res: Response): Promis
  */
 export async function getAnalysisHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analyses.getAnalysisHandler');
         const user = res.locals.user;
         const { analysisId } = req.params;
         const id = String(analysisId ?? '');
@@ -140,6 +144,7 @@ export async function getAnalysisHandler(req: Request, res: Response): Promise<v
  */
 export async function deleteAnalysisHandler(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('analyses.deleteAnalysisHandler');
         const user = res.locals.user;
         const { analysisId } = req.params;
         const id = String(analysisId ?? '');

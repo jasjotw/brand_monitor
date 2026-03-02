@@ -1,15 +1,6 @@
-// ─────────────────────────────────────────────────────────────
-// src/db/schema.ts
-// Source: WebApp/lib/db/schema.ts — brand-monitor tables ONLY.
-// The main app's user/conversation/message/aeo tables are intentionally
-// excluded; they live in the Next.js app and share the same DB.
-// ─────────────────────────────────────────────────────────────
-
-import { pgTable, text, timestamp, uuid, boolean, jsonb, integer, unique, serial, varchar } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, boolean, jsonb, integer, unique, serial, varchar, numeric } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
-// ── users ────────────────────────────────────────────────────────────────
-// Auth service user table (shared DB).
 export const users = pgTable('users', {
     id: serial('id').primaryKey(),
     name: varchar('name', { length: 255 }).notNull(),
@@ -26,8 +17,6 @@ export const users = pgTable('users', {
         .$onUpdate(() => sql`now()`),
 });
 
-// ── brand_profile ─────────────────────────────────────────────
-// Cached scraped data for a brand URL, scoped to a user.
 export const brandprofile = pgTable('brand_profile', {
     id: uuid('id').primaryKey().notNull().unique(),
     userId: text('user_id').notNull(),
@@ -51,8 +40,6 @@ export const brandprofile = pgTable('brand_profile', {
     unq: unique().on(t.userId, t.url),
 }));
 
-// ── brand_analyses ────────────────────────────────────────────
-// Persisted results of a completed brand analysis run.
 export const brandAnalyses = pgTable('brand_analyses', {
     id: uuid('id').primaryKey().defaultRandom(),
     userId: text('user_id').notNull(),
@@ -61,14 +48,14 @@ export const brandAnalyses = pgTable('brand_analyses', {
     companyName: text('company_name'),
     industry: text('industry'),
     analysisData: jsonb('analysis_data'),
+    draftPrompts: jsonb('draft_prompts').notNull().default(sql`'[]'::jsonb`),
     competitors: jsonb('competitors'),
     prompts: jsonb('prompts'),
-    creditsUsed: integer('credits_used').default(10),
+    creditsUsed: numeric('credits_used', { precision: 12, scale: 2 }).default('10'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()),
 });
 
-// Dedicated storage for Personas + ICP per user + brand.
 export const audienceProfiles = pgTable('audience_profiles', {
     id: uuid('id').primaryKey().defaultRandom(),
     userId: text('user_id').notNull(),
@@ -82,7 +69,6 @@ export const audienceProfiles = pgTable('audience_profiles', {
     unq: unique().on(t.userId, t.brandId),
 }));
 
-// Backlink analytics snapshot for each user + brand pair.
 export const brandBacklinkSnapshots = pgTable('brand_backlink_snapshots', {
     id: uuid('id').primaryKey().defaultRandom(),
     userId: text('user_id').notNull(),
@@ -94,13 +80,102 @@ export const brandBacklinkSnapshots = pgTable('brand_backlink_snapshots', {
     unq: unique().on(t.userId, t.brandId),
 }));
 
-// ── Relations (self-contained — no user table reference needed) ─
+export const plans = pgTable('plans', {
+    code: text('code').primaryKey(),
+    name: text('name').notNull(),
+    description: text('description'),
+    monthlyCredits: numeric('monthly_credits', { precision: 12, scale: 2 }).notNull().default('0'),
+    isActive: boolean('is_active').notNull().default(true),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()),
+});
+
+export const planFeatures = pgTable('plan_features', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    planCode: text('plan_code').notNull().references(() => plans.code, { onDelete: 'cascade' }),
+    featureCode: text('feature_code').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    limitValue: numeric('limit_value', { precision: 12, scale: 2 }),
+    config: jsonb('config').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()),
+}, (t) => ({
+    unq: unique().on(t.planCode, t.featureCode),
+}));
+
+export const userSubscriptions = pgTable('user_subscriptions', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    planCode: text('plan_code').notNull().references(() => plans.code),
+    status: text('status').notNull().default('active'),
+    startsAt: timestamp('starts_at').defaultNow(),
+    endsAt: timestamp('ends_at'),
+    autoRenew: boolean('auto_renew').notNull().default(true),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()),
+});
+
+export const brandPlanOverrides = pgTable('brand_plan_overrides', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    brandId: uuid('brand_id').notNull().references(() => brandprofile.id, { onDelete: 'cascade' }),
+    planCode: text('plan_code').notNull().references(() => plans.code),
+    status: text('status').notNull().default('active'),
+    metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()),
+}, (t) => ({
+    unq: unique().on(t.userId, t.brandId),
+}));
+
+export const creditWallets = pgTable('credit_wallets', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull().unique(),
+    balance: numeric('balance', { precision: 12, scale: 2 }).notNull().default('0'),
+    reservedBalance: numeric('reserved_balance', { precision: 12, scale: 2 }).notNull().default('0'),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()),
+});
+
+export const creditLedger = pgTable('credit_ledger', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    delta: numeric('delta', { precision: 12, scale: 2 }).notNull(),
+    reason: text('reason').notNull(),
+    referenceType: text('reference_type'),
+    referenceId: text('reference_id'),
+    metadata: jsonb('metadata').default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const creditReservations = pgTable('credit_reservations', {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id').notNull(),
+    amountTotal: numeric('amount_total', { precision: 12, scale: 2 }).notNull(),
+    amountRemaining: numeric('amount_remaining', { precision: 12, scale: 2 }).notNull(),
+    status: text('status').notNull().default('reserved'),
+    reason: text('reason').notNull().default('usage_reserve'),
+    referenceType: text('reference_type'),
+    referenceId: text('reference_id'),
+    metadata: jsonb('metadata').default(sql`'{}'::jsonb`),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()),
+});
+
 export const brandAnalysesRelations = relations(brandAnalyses, ({ }) => ({}));
 export const brandprofileRelations = relations(brandprofile, ({ }) => ({}));
 export const audienceProfilesRelations = relations(audienceProfiles, ({ }) => ({}));
 export const brandBacklinkSnapshotsRelations = relations(brandBacklinkSnapshots, ({ }) => ({}));
+export const plansRelations = relations(plans, ({ }) => ({}));
+export const planFeaturesRelations = relations(planFeatures, ({ }) => ({}));
+export const userSubscriptionsRelations = relations(userSubscriptions, ({ }) => ({}));
+export const brandPlanOverridesRelations = relations(brandPlanOverrides, ({ }) => ({}));
+export const creditWalletsRelations = relations(creditWallets, ({ }) => ({}));
+export const creditLedgerRelations = relations(creditLedger, ({ }) => ({}));
+export const creditReservationsRelations = relations(creditReservations, ({ }) => ({}));
 
-// ── Type exports ──────────────────────────────────────────────
 export type BrandProfile = typeof brandprofile.$inferSelect;
 export type NewBrandProfile = typeof brandprofile.$inferInsert;
 export type BrandAnalysisRow = typeof brandAnalyses.$inferSelect;
@@ -109,5 +184,19 @@ export type AudienceProfileRow = typeof audienceProfiles.$inferSelect;
 export type NewAudienceProfileRow = typeof audienceProfiles.$inferInsert;
 export type BrandBacklinkSnapshotRow = typeof brandBacklinkSnapshots.$inferSelect;
 export type NewBrandBacklinkSnapshotRow = typeof brandBacklinkSnapshots.$inferInsert;
+export type PlanRow = typeof plans.$inferSelect;
+export type NewPlanRow = typeof plans.$inferInsert;
+export type PlanFeatureRow = typeof planFeatures.$inferSelect;
+export type NewPlanFeatureRow = typeof planFeatures.$inferInsert;
+export type UserSubscriptionRow = typeof userSubscriptions.$inferSelect;
+export type NewUserSubscriptionRow = typeof userSubscriptions.$inferInsert;
+export type BrandPlanOverrideRow = typeof brandPlanOverrides.$inferSelect;
+export type NewBrandPlanOverrideRow = typeof brandPlanOverrides.$inferInsert;
+export type CreditWalletRow = typeof creditWallets.$inferSelect;
+export type NewCreditWalletRow = typeof creditWallets.$inferInsert;
+export type CreditLedgerRow = typeof creditLedger.$inferSelect;
+export type NewCreditLedgerRow = typeof creditLedger.$inferInsert;
+export type CreditReservationRow = typeof creditReservations.$inferSelect;
+export type NewCreditReservationRow = typeof creditReservations.$inferInsert;
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Sidebar } from "@/components/dashboard/sidebar";
@@ -39,10 +39,15 @@ export default function DashboardLayout({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [globalPlatform, setGlobalPlatform] = useState("all");
+  const [globalDateRange, setGlobalDateRange] = useState("7d");
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [hasBrand, setHasBrand] = useState<boolean | null>(null);
   const [brandLoading, setBrandLoading] = useState(false);
   const [brandError, setBrandError] = useState<string | null>(null);
+  const [currentBrandName, setCurrentBrandName] = useState<string>("Your Brand");
+  const [currentPlanName, setCurrentPlanName] = useState<string>("Plan not set");
   const [competitors, setCompetitors] = useState([{ name: "", url: "" }]);
   const [brandProfileId, setBrandProfileId] = useState<string | null>(null);
   const [hasAnalyses, setHasAnalyses] = useState<boolean | null>(null);
@@ -50,7 +55,17 @@ export default function DashboardLayout({
   const [audienceText, setAudienceText] = useState("");
   const [marketPositioning, setMarketPositioning] = useState<"budget" | "premium" | "luxury">("budget");
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
+
+  const normalizePlanName = (plan: string) => {
+    const value = plan.trim().toLowerCase();
+    if (!value) return "Plan not set";
+    if (value === "business") return "Business";
+    if (value === "pro") return "Pro";
+    if (value === "basic") return "Basic";
+    return value.charAt(0).toUpperCase() + value.slice(1);
+  };
 
   // Handle global "/" shortcut
   useEffect(() => {
@@ -77,8 +92,62 @@ export default function DashboardLayout({
     }
     setAuthToken(token);
     scheduleTokenRefresh(token);
+    loadUserPlan(token);
     checkBrand(token);
   }, [router]);
+
+  useEffect(() => {
+    const nextQuery = searchParams.get("q") || "";
+    const nextPlatform = searchParams.get("platform") || "all";
+    const nextDateRange = searchParams.get("range") || "7d";
+    setGlobalQuery(nextQuery);
+    setGlobalPlatform(nextPlatform);
+    setGlobalDateRange(nextDateRange);
+  }, [searchParams]);
+
+  const updateGlobalFiltersInUrl = (updates: {
+    q?: string;
+    platform?: string;
+    range?: string;
+  }) => {
+    const params = new URLSearchParams(searchParams.toString());
+    const nextQ = updates.q ?? globalQuery;
+    const nextPlatform = updates.platform ?? globalPlatform;
+    const nextRange = updates.range ?? globalDateRange;
+
+    if (nextQ.trim()) params.set("q", nextQ.trim());
+    else params.delete("q");
+
+    if (nextPlatform && nextPlatform !== "all") params.set("platform", nextPlatform);
+    else params.delete("platform");
+
+    if (nextRange && nextRange !== "7d") params.set("range", nextRange);
+    else params.delete("range");
+
+    const nextQueryString = params.toString();
+    const nextUrl = nextQueryString ? `${pathname}?${nextQueryString}` : pathname;
+    router.replace(nextUrl, { scroll: false });
+  };
+
+  useEffect(() => {
+    const handler = () => {
+      const fromStorage =
+        typeof window !== "undefined" ? window.localStorage.getItem("selected_plan_name") : null;
+      if (fromStorage && fromStorage.trim()) {
+        setCurrentPlanName(normalizePlanName(fromStorage));
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("plan-changed", handler as EventListener);
+      window.addEventListener("storage", handler);
+      return () => {
+        window.removeEventListener("plan-changed", handler as EventListener);
+        window.removeEventListener("storage", handler);
+      };
+    }
+    return;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleUnauthorized(): void {
     clearAuthToken();
@@ -127,6 +196,11 @@ export default function DashboardLayout({
       }
       const hasBrandResult = Boolean(data?.hasBrand);
       setHasBrand(hasBrandResult);
+      setCurrentBrandName(
+        hasBrandResult && typeof data?.brand?.name === "string" && data.brand.name.trim().length > 0
+          ? data.brand.name
+          : "Your Brand"
+      );
       if (!hasBrandResult) {
         setBrandProfileId(null);
         setHasAnalyses(null);
@@ -144,6 +218,41 @@ export default function DashboardLayout({
       setBrandError(message);
     } finally {
       setBrandLoading(false);
+    }
+  }
+
+  async function loadUserPlan(token: string) {
+    try {
+      const baseUrl =
+        process.env.NEXT_PUBLIC_BRAND_MONITOR_URL || "http://localhost:4001";
+      const response = await fetch(`${baseUrl}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+      if (!response.ok) return;
+      const data = await response.json().catch(() => ({}));
+      const candidates = [
+        data?.user?.plan,
+        data?.user?.planName,
+        data?.user?.subscriptionPlan,
+        data?.user?.subscription?.plan,
+        data?.user?.config?.plan,
+      ];
+      const plan = candidates.find((value) => typeof value === "string" && value.trim().length > 0);
+      if (plan) {
+        const normalized = String(plan).trim();
+        const normalizedName = normalizePlanName(normalized);
+        const override =
+          typeof window !== "undefined" ? window.localStorage.getItem("selected_plan_name") : null;
+        setCurrentPlanName(override && override.trim() ? normalizePlanName(override) : normalizedName);
+      } else {
+        setCurrentPlanName("Plan not set");
+      }
+    } catch (err) {
+      console.warn("[Dashboard] Failed to load user plan:", err);
     }
   }
 
@@ -287,6 +396,8 @@ export default function DashboardLayout({
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
           locked={shouldLock}
+          brandName={currentBrandName}
+          planName={currentPlanName}
         />
       </div>
 
@@ -297,6 +408,7 @@ export default function DashboardLayout({
           onMenuClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           isMenuOpen={mobileMenuOpen}
           onSearchClick={() => setSearchOpen(!searchOpen)}
+          onFilterClick={() => setSearchOpen(true)}
         />
         
         {/* Search Hover Trigger Zone */}
@@ -319,7 +431,22 @@ export default function DashboardLayout({
 
           <SearchBar 
             isOpen={searchOpen} 
-            onClose={() => setSearchOpen(false)} 
+            onClose={() => setSearchOpen(false)}
+            query={globalQuery}
+            onQueryChange={(value) => {
+              setGlobalQuery(value);
+              updateGlobalFiltersInUrl({ q: value });
+            }}
+            selectedDateValue={globalDateRange}
+            onDateChange={(value) => {
+              setGlobalDateRange(value);
+              updateGlobalFiltersInUrl({ range: value });
+            }}
+            selectedPlatformValue={globalPlatform}
+            onPlatformChange={(value) => {
+              setGlobalPlatform(value);
+              updateGlobalFiltersInUrl({ platform: value });
+            }}
           />
         </div>
 

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { z, ZodError } from 'zod';
-import { and, desc, eq, or } from 'drizzle-orm';
+import { and, desc, eq, or, sql } from 'drizzle-orm';
 import { brandprofile } from '../db/schema';
 import { db } from '../db/client';
 import { handleApiError, ValidationError, ApiError, ErrorCode } from '../utils/errors';
@@ -8,6 +8,9 @@ import { randomUUID } from 'crypto';
 import { scrapeCompanyInfo } from '../services/scraper.service';
 import { generatePersonasForBrand } from '../services/ai.service';
 import { Company } from '../types';
+import { logMethodEntry } from '../utils/logger';
+import { env } from '../config/env';
+import { getUserFeatureAccess } from '../services/plan.service';
 
 const competitorSchema = z.object({
     name: z.string().min(1, 'Competitor name is required'),
@@ -23,6 +26,7 @@ const createSchema = z.object({
     usp: z.array(z.string().min(1)).optional(),
     audience: z.string().optional(),
     marketPositioning: z.enum(['budget', 'premium', 'luxury']).optional(),
+    skipScrape: z.boolean().optional(),
 });
 
 function normalizeUrl(rawUrl: string): string {
@@ -35,6 +39,7 @@ function normalizeUrl(rawUrl: string): string {
 
 export async function brandExists(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('brandProfile.brandExists');
         const userId = String(req.user?.userId ?? '');
         if (!userId) {
             throw new ApiError('Unauthorized', 401, ErrorCode.UNAUTHORIZED);
@@ -62,6 +67,7 @@ export async function brandExists(req: Request, res: Response): Promise<void> {
 
 export async function getCurrentBrandProfile(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('brandProfile.getCurrentBrandProfile');
         const userId = String(req.user?.userId ?? '');
         if (!userId) {
             throw new ApiError('Unauthorized', 401, ErrorCode.UNAUTHORIZED);
@@ -119,6 +125,7 @@ function mapProfileToCompany(profile: typeof brandprofile.$inferSelect): Company
 
 export async function getPersonas(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('brandProfile.getPersonas');
         const userId = String(req.user?.userId ?? '');
         if (!userId) {
             throw new ApiError('Unauthorized', 401, ErrorCode.UNAUTHORIZED);
@@ -152,6 +159,7 @@ export async function getPersonas(req: Request, res: Response): Promise<void> {
 
 export async function createPersonas(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('brandProfile.createPersonas');
         const userId = String(req.user?.userId ?? '');
         if (!userId) {
             throw new ApiError('Unauthorized', 401, ErrorCode.UNAUTHORIZED);
@@ -190,6 +198,7 @@ export async function createPersonas(req: Request, res: Response): Promise<void>
 
 export async function createBrandProfile(req: Request, res: Response): Promise<void> {
     try {
+        logMethodEntry('brandProfile.createBrandProfile');
         const userId = String(req.user?.userId ?? '');
         if (!userId) {
             throw new ApiError('Unauthorized', 401, ErrorCode.UNAUTHORIZED);
@@ -198,6 +207,29 @@ export async function createBrandProfile(req: Request, res: Response): Promise<v
         const data = createSchema.parse(req.body);
         const normalizedUrl = normalizeUrl(data.url);
         const normalizedUrlWithSlash = `${normalizedUrl}/`;
+
+        const brandLimitFeature = await getUserFeatureAccess(userId, 'brands.max', '[BrandProfile]');
+        if (!brandLimitFeature.enabled) {
+            throw new ApiError(
+                `Your ${brandLimitFeature.planCode} plan does not allow creating brands.`,
+                403,
+                ErrorCode.FORBIDDEN,
+            );
+        }
+        if (brandLimitFeature.limitValue !== null) {
+            const [countRow] = await db
+                .select({ count: sql<number>`count(*)` })
+                .from(brandprofile)
+                .where(eq(brandprofile.userId, userId));
+            const currentBrandCount = Number(countRow?.count ?? 0);
+            if (currentBrandCount >= brandLimitFeature.limitValue) {
+                throw new ApiError(
+                    `Plan limit reached. Your ${brandLimitFeature.planCode} plan allows up to ${brandLimitFeature.limitValue} brand(s).`,
+                    403,
+                    ErrorCode.FORBIDDEN,
+                );
+            }
+        }
 
         const existing = await db
             .select({ id: brandprofile.id })
@@ -251,20 +283,25 @@ export async function createBrandProfile(req: Request, res: Response): Promise<v
                 createdAt: brandprofile.createdAt,
             });
 
-        try {
-            const company = await scrapeCompanyInfo(normalizedUrl);
-            await db
-                .update(brandprofile)
-                .set({
-                    description: company.description ?? null,
-                    logo: company.logo ?? null,
-                    favicon: company.favicon ?? null,
-                    scrapedData: company.scrapedData ?? null,
-                    isScraped: true,
-                })
-                .where(eq(brandprofile.id, inserted.id));
-        } catch (scrapeError) {
-            console.warn('[BrandProfile] Scrape failed after creation:', (scrapeError as Error).message);
+        const shouldSkipScrape = data.skipScrape === true || env.BRAND_CREATE_SKIP_SCRAPE;
+        if (!shouldSkipScrape) {
+            try {
+                const company = await scrapeCompanyInfo(normalizedUrl);
+                await db
+                    .update(brandprofile)
+                    .set({
+                        description: company.description ?? null,
+                        logo: company.logo ?? null,
+                        favicon: company.favicon ?? null,
+                        scrapedData: company.scrapedData ?? null,
+                        isScraped: true,
+                    })
+                    .where(eq(brandprofile.id, inserted.id));
+            } catch (scrapeError) {
+                console.warn('[BrandProfile] Scrape failed after creation:', (scrapeError as Error).message);
+            }
+        } else {
+            console.log('[BrandProfile] Scrape skipped by configuration for brand create');
         }
 
         res.status(201).json({ brand: inserted });

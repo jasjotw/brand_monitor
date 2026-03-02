@@ -6,6 +6,9 @@ import {
     generateAudienceIcp,
     generateAudienceBaseQuery,
     generateAudiencePrompts,
+    getAudiencePromptState,
+    getAudiencePromptDraftDebug,
+    manageAudiencePrompts,
     updateAudienceProfile,
 } from '../controllers/audience.controller';
 
@@ -16,6 +19,9 @@ router.post('/generate-personas', jwtAuthMiddleware, generateAudiencePersonas);
 router.post('/generate-icp', jwtAuthMiddleware, generateAudienceIcp);
 router.post('/generate-base-query', jwtAuthMiddleware, generateAudienceBaseQuery);
 router.post('/generate-prompts', jwtAuthMiddleware, generateAudiencePrompts);
+router.get('/prompts/current', jwtAuthMiddleware, getAudiencePromptState);
+router.get('/prompts/debug-latest-draft', jwtAuthMiddleware, getAudiencePromptDraftDebug);
+router.post('/prompts/manage', jwtAuthMiddleware, manageAudiencePrompts);
 router.put('/current', jwtAuthMiddleware, updateAudienceProfile);
 
 export default router;

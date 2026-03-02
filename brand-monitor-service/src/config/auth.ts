@@ -1,17 +1,3 @@
-// ─────────────────────────────────────────────────────────────
-// src/config/auth.ts
-// Source: WebApp/lib/auth.ts  (session validation only)
-//
-// We reuse the same better-auth config so that session cookies
-// issued by the Next.js WebApp are fully trusted here.
-//
-// NOTE: The autumn() better-auth plugin is intentionally NOT
-// included here. That plugin is only needed for the auth login
-// flow (e.g. granting credits on signup). This microservice only
-// validates existing sessions — credit checks go directly through
-// the Autumn SDK in credit.service.ts without needing the plugin.
-// ─────────────────────────────────────────────────────────────
-
 import { Pool } from 'pg';
 
 let authInstance: any = null;
@@ -19,8 +5,7 @@ let authInstance: any = null;
 export async function getAuth() {
     if (authInstance) return authInstance;
 
-    // Use eval to prevent TypeScript from converting this into a CommonJS require()
-    // This allows us to load the ESM-only 'better-auth' package in our CommonJS project
+    // Load ESM-only better-auth from CommonJS runtime.
     const { betterAuth } = await eval("import('better-auth')");
 
     authInstance = betterAuth({
@@ -35,8 +20,8 @@ export async function getAuth() {
             requireEmailVerification: false,
         },
         session: {
-            expiresIn: 60 * 60 * 24 * 7,   // 7 days — must match WebApp
-            updateAge: 60 * 60 * 24,         // update if older than 1 day
+            expiresIn: 60 * 60 * 24 * 7,
+            updateAge: 60 * 60 * 24,
             cookieOptions: {
                 httpOnly: true,
                 sameSite: 'lax' as const,
@@ -49,8 +34,7 @@ export async function getAuth() {
                 enabled: process.env.NODE_ENV === 'production',
             },
         },
-        // No plugins — autumn() is not needed for session validation only.
-        // Credit tracking is handled directly in credit.service.ts.
+        // Billing/credits are handled by in-house services.
     });
 
     return authInstance;

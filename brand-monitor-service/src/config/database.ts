@@ -11,9 +11,9 @@ import { env } from './env';
 
 const pool = new Pool({
     connectionString: env.DATABASE_URL,
-    max: 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000,
+    max: env.DB_POOL_MAX,
+    idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
+    connectionTimeoutMillis: env.DB_POOL_CONN_TIMEOUT_MS,
     maxUses: 7500,
     keepAlive: true,
     keepAliveInitialDelayMillis: 10000,

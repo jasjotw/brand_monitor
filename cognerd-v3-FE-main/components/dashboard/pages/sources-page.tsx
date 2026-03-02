@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { ExternalLink, Link2, TrendingUp, Globe, FileText, BarChart3 } from "lucide-react";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from "recharts";
@@ -52,15 +54,62 @@ function CustomTooltip({ active, payload, label }: any) {
 }
 
 export function SourcesPage() {
-  const totalTraffic = referralData.reduce((a, b) => a + b.visits, 0);
+  const searchParams = useSearchParams();
+  const globalQuery = (searchParams.get("q") || "").trim().toLowerCase();
+  const globalPlatform = (searchParams.get("platform") || "all").toLowerCase();
+
+  const filteredTopSources = useMemo(
+    () =>
+      topSources.filter((s) => {
+        const matchesQuery =
+          !globalQuery ||
+          `${s.page} ${s.url} ${s.platforms.join(" ")}`.toLowerCase().includes(globalQuery);
+        const matchesPlatform =
+          globalPlatform === "all" || s.platforms.some((p) => matchesPlatformAlias(p, globalPlatform));
+        return matchesQuery && matchesPlatform;
+      }),
+    [globalPlatform, globalQuery]
+  );
+
+  const filteredReferralData = useMemo(
+    () =>
+      referralData.filter((r) => {
+        const matchesQuery = !globalQuery || r.source.toLowerCase().includes(globalQuery);
+        const matchesPlatform = globalPlatform === "all" || matchesPlatformAlias(r.source, globalPlatform);
+        return matchesQuery && matchesPlatform;
+      }),
+    [globalPlatform, globalQuery]
+  );
+
+  const filteredTrafficByDay = useMemo(() => {
+    if (globalPlatform === "all") return trafficByDay;
+    const keyMap: Record<string, "chatgpt" | "gemini" | "perplexity" | "other"> = {
+      chatgpt: "chatgpt",
+      gemini: "gemini",
+      perplexity: "perplexity",
+      claude: "other",
+      "ai-overviews": "other",
+    };
+    const selectedKey = keyMap[globalPlatform];
+    if (!selectedKey) return trafficByDay;
+    return trafficByDay.map((row) => ({
+      ...row,
+      chatgpt: selectedKey === "chatgpt" ? row.chatgpt : 0,
+      perplexity: selectedKey === "perplexity" ? row.perplexity : 0,
+      gemini: selectedKey === "gemini" ? row.gemini : 0,
+      other: selectedKey === "other" ? row.other : 0,
+    }));
+  }, [globalPlatform]);
+
+  const totalTraffic = filteredReferralData.reduce((a, b) => a + b.visits, 0);
 
   return (
     <div className="flex flex-col gap-6">
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
         {[
-          { label: "Tracked Pages", value: topSources.length.toString(), icon: <FileText size={16} strokeWidth={1.5} /> },
-          { label: "Total Citations", value: topSources.reduce((a, b) => a + b.citations, 0).toString(), icon: <Link2 size={16} strokeWidth={1.5} /> },
+          { label: "Tracked Pages", value: filteredTopSources.length.toString(), icon: <FileText size={16} strokeWidth={1.5} /> },
+          { label: "Total Citations", value: filteredTopSources.reduce((a, b) => a + b.citations, 0).toString(), icon: <Link2 size={16} strokeWidth={1.5} /> },
           { label: "AI Referral Traffic", value: `${(totalTraffic / 1000).toFixed(1)}k`, icon: <Globe size={16} strokeWidth={1.5} /> },
           { label: "Traffic Growth", value: "+18%", icon: <TrendingUp size={16} strokeWidth={1.5} /> },
         ].map((stat) => (
@@ -85,8 +134,8 @@ export function SourcesPage() {
             <div className="relative h-[160px] w-[160px] shrink-0">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={referralData} cx="50%" cy="50%" innerRadius={50} outerRadius={72} paddingAngle={3} dataKey="visits" nameKey="source" strokeWidth={0}>
-                    {referralData.map((entry, index) => (
+                  <Pie data={filteredReferralData} cx="50%" cy="50%" innerRadius={50} outerRadius={72} paddingAngle={3} dataKey="visits" nameKey="source" strokeWidth={0}>
+                    {filteredReferralData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
@@ -99,7 +148,7 @@ export function SourcesPage() {
               </div>
             </div>
             <div className="flex flex-col gap-2">
-              {referralData.map((r) => (
+              {filteredReferralData.map((r) => (
                 <div key={r.source} className="flex items-center gap-2">
                   <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: r.color }} />
                   <span className="text-xs text-foreground">{r.source}</span>
@@ -120,7 +169,7 @@ export function SourcesPage() {
           </div>
           <div className="h-[200px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={trafficByDay} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
+              <BarChart data={filteredTrafficByDay} margin={{ top: 4, right: 4, bottom: 0, left: -20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#E8E4E0" strokeOpacity={0.5} vertical={false} />
                 <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#000000" }} />
                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: "#000000" }} />
@@ -153,7 +202,7 @@ export function SourcesPage() {
               </tr>
             </thead>
             <tbody>
-              {topSources.map((s, i) => (
+              {filteredTopSources.map((s, i) => (
                 <tr key={s.url} className="border-b border-border/50 last:border-0 hover:bg-secondary/30">
                   <td className="px-5 py-3">
                     <div className="flex flex-col gap-0.5">
@@ -187,4 +236,18 @@ export function SourcesPage() {
       </div>
     </div>
   );
+}
+
+function matchesPlatformAlias(source: string, selectedPlatform: string) {
+  const value = source.toLowerCase();
+  if (!selectedPlatform || selectedPlatform === "all") return true;
+  const aliases: Record<string, string[]> = {
+    chatgpt: ["chatgpt", "openai", "gpt"],
+    gemini: ["gemini", "google"],
+    perplexity: ["perplexity"],
+    claude: ["claude", "anthropic"],
+    "ai-overviews": ["ai overviews", "ai-overviews", "google"],
+  };
+  const expected = aliases[selectedPlatform] || [selectedPlatform];
+  return expected.some((alias) => value.includes(alias));
 }

@@ -56,7 +56,7 @@ src/
 │   ├── analyze.routes.ts
 │   └── analyses.routes.ts
 ├── services/
-│   ├── credit.service.ts         ← Autumn SDK credit check / tracking
+│   ├── credit.service.ts         ← In-house wallet and credit ledger
 │   ├── brand.service.ts          ← brandprofile DB queries
 │   ├── analysis-crud.service.ts  ← brandAnalyses CRUD
 │   ├── scraper.service.ts        ← Firecrawl + AI extraction
@@ -101,7 +101,7 @@ cp .env.example .env
 | `BETTER_AUTH_SECRET` | **Must be identical** to the WebApp's `BETTER_AUTH_SECRET` |
 | `OPENROUTER_API_KEY` | Single key for all AI providers via OpenRouter |
 | `FIRECRAWL_API_KEY` | Required for website scraping |
-| `AUTUMN_SECRET_KEY` | Billing / credit checks |
+| `INITIAL_FREE_CREDITS` | Billing / credit checks |
 
 ### 3. Run in development
 
@@ -163,15 +163,19 @@ docker-compose up --build brand-monitor
 | `PORT` | no | `4001` | HTTP port |
 | `NODE_ENV` | no | `development` | `development` / `production` |
 | `DATABASE_URL` | **yes** | — | PostgreSQL connection string |
+| `DB_POOL_MAX` | no | `30` | Maximum PostgreSQL pool connections |
+| `DB_POOL_IDLE_TIMEOUT_MS` | no | `30000` | Idle connection timeout |
+| `DB_POOL_CONN_TIMEOUT_MS` | no | `10000` | Connection acquisition timeout |
 | `BETTER_AUTH_SECRET` | **yes** | — | Must match WebApp exactly |
 | `WEBAPP_BASE_URL` | no | `http://localhost:3000` | CORS allowed origin |
 | `CORS_ORIGINS` | no | same as `WEBAPP_BASE_URL` | Comma-separated extra origins |
 | `JWT_SECRET` | **yes** | — | HMAC secret for auth JWTs |
 | `OPENROUTER_API_KEY` | **yes** | — | OpenRouter API key |
 | `FIRECRAWL_API_KEY` | **yes** | — | Firecrawl API key |
-| `AUTUMN_SECRET_KEY` | **yes** | — | Autumn billing secret key |
+| `INITIAL_FREE_CREDITS` | **yes** | — | Initial wallet balance for new users |
 | `SUPERUSER_EMAILS` | no | — | Comma-separated admin emails |
 | `USE_MOCK_MODE` | no | `false` | Return canned AI responses |
+| `BRAND_CREATE_SKIP_SCRAPE` | no | `false` | Skip scrape on brand creation (useful for load tests) |
 
 ---
 
@@ -223,3 +227,26 @@ Returns a single saved analysis.
 
 ### `DELETE /api/brand-monitor/analyses/:analysisId`  *(auth required)*
 Permanently deletes a saved analysis.
+
+---
+
+## Concurrency Smoke Test (50 users)
+
+Use the built-in script to test concurrent register/login/profile calls:
+
+```bash
+npm run load:test:auth
+```
+
+Optional settings:
+
+```bash
+# Example values
+LOAD_TEST_BASE_URL=http://localhost:3001
+LOAD_TEST_USERS=50
+LOAD_TEST_CONCURRENCY=50
+LOAD_TEST_RUN_BRAND_CREATE=true
+```
+
+When `LOAD_TEST_RUN_BRAND_CREATE=true`, the script sends `skipScrape: true` so brand creation stays DB-only.
+

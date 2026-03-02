@@ -19,6 +19,7 @@ import {
   Network,
   Cloud
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 interface NavItem {
   label: string;
@@ -201,27 +202,41 @@ function NavItemComponent({
   );
 }
 
-function BrandSection({ collapsed, textVariants }: { collapsed: boolean; textVariants: any }) {
-  const brandName = "Acme Corp";
-  const brandUrl = "acme-corp.ai";
-  const [displayBrand, setDisplayBrand] = useState(brandName);
+function BrandSection({
+  collapsed,
+  textVariants,
+  brandName,
+  planName,
+}: {
+  collapsed: boolean;
+  textVariants: any;
+  brandName: string;
+  planName: string;
+}) {
+  const router = useRouter();
+  const safeBrandName = brandName?.trim() || "Your Brand";
+  const [displayBrand, setDisplayBrand] = useState(safeBrandName);
   const [isHovered, setIsHovered] = useState(false);
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()";
+
+  useEffect(() => {
+    setDisplayBrand(safeBrandName);
+  }, [safeBrandName]);
 
   const scramble = () => {
     let iteration = 0;
     const interval = setInterval(() => {
       setDisplayBrand(
-        brandName
+        safeBrandName
           .split("")
           .map((letter, index) => {
-            if (index < iteration) return brandName[index];
+            if (index < iteration) return safeBrandName[index];
             return chars[Math.floor(Math.random() * chars.length)];
           })
           .join("")
       );
 
-      if (iteration >= brandName.length) clearInterval(interval);
+      if (iteration >= safeBrandName.length) clearInterval(interval);
       iteration += 1 / 3;
     }, 30);
   };
@@ -235,10 +250,18 @@ function BrandSection({ collapsed, textVariants }: { collapsed: boolean; textVar
       }}
       onMouseLeave={() => {
         setIsHovered(false);
-        setDisplayBrand(brandName);
+        setDisplayBrand(safeBrandName);
       }}
     >
-      <div className={cn("group/brand flex items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-sidebar-accent/50", collapsed && "justify-center px-0")}>
+      <button
+        type="button"
+        onClick={() => router.push("/dashboard/settings?section=billing")}
+        className={cn(
+          "group/brand flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-sidebar-accent/50",
+          collapsed && "justify-center px-0"
+        )}
+        title="Open billing and plan settings"
+      >
         <motion.div 
           layout
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-sm font-semibold text-accent-foreground z-20 relative overflow-hidden"
@@ -247,7 +270,7 @@ function BrandSection({ collapsed, textVariants }: { collapsed: boolean; textVar
             animate={isHovered ? { rotate: 360 } : { rotate: 0 }}
             transition={{ duration: 0.5, ease: "easeInOut" }}
           >
-            A
+            {safeBrandName.charAt(0).toUpperCase()}
           </motion.span>
           <AnimatePresence>
             {isHovered && (
@@ -261,37 +284,15 @@ function BrandSection({ collapsed, textVariants }: { collapsed: boolean; textVar
           </AnimatePresence>
         </motion.div>
         
-        <motion.div variants={textVariants} className="flex flex-col overflow-hidden whitespace-nowrap">
-          <span className="truncate text-sm font-semibold text-sidebar-foreground font-mono">
+        <motion.div variants={textVariants} className="flex w-full flex-col items-start overflow-hidden py-0.5">
+          <p className="block w-full truncate text-sm font-semibold leading-5 tracking-tight text-sidebar-foreground">
             {displayBrand}
-          </span>
-          <div className="relative h-4">
-            <AnimatePresence mode="wait">
-              {!isHovered ? (
-                <motion.span
-                  key="plan"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  className="absolute inset-0 truncate text-xs text-muted-foreground"
-                >
-                  Pro Plan
-                </motion.span>
-              ) : (
-                <motion.span
-                  key="url"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  className="absolute inset-0 truncate text-xs font-medium text-primary"
-                >
-                  {brandUrl}
-                </motion.span>
-              )}
-            </AnimatePresence>
-          </div>
+          </p>
+          <p className="mt-1 block w-full truncate text-xs leading-4 text-muted-foreground">
+            {planName}
+          </p>
         </motion.div>
-      </div>
+      </button>
     </div>
   );
 }
@@ -302,12 +303,16 @@ export function Sidebar({
   collapsed,
   onToggleCollapse,
   locked = false,
+  brandName = "Your Brand",
+  planName = "Plan not set",
 }: {
   activeItem: string;
   onNavigate?: (id: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
   locked?: boolean;
+  brandName?: string;
+  planName?: string;
 }) {
   const [isDimmed, setIsDimmed] = useState(false);
 
@@ -384,7 +389,7 @@ export function Sidebar({
         </nav>
 
         {/* Bottom section */}
-        <BrandSection collapsed={collapsed} textVariants={textVariants} />
+        <BrandSection collapsed={collapsed} textVariants={textVariants} brandName={brandName} planName={planName} />
       </motion.div>
     </motion.aside>
   );

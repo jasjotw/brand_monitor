@@ -1,6 +1,7 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { brandAnalyses } from '../db/schema';
+import { logMethodEntry } from '../utils/logger';
 
 type AnyObj = Record<string, any>;
 
@@ -51,13 +52,17 @@ function isBrandMentioned(signal: ParsedSignalLike): boolean {
 }
 
 function brandCitationCount(signal: ParsedSignalLike): number {
-    return isBrandMentioned(signal) ? toNumber(signal.citationCount) : 0;
+    if (!isBrandMentioned(signal)) return 0;
+    const hasCitation = toNumber(signal.citationPresence) > 0 || toNumber(signal.citationCount) > 0;
+    return hasCitation ? 1 : 0;
 }
 
 function brandMentionCount(signal: ParsedSignalLike): number {
-    return isBrandMentioned(signal)
-        ? toNumber(signal.explicitCount) + toNumber(signal.implicitMention)
-        : 0;
+    return isBrandMentioned(signal) ? 1 : 0;
+}
+
+function explicitMentionPresence(signal: ParsedSignalLike): number {
+    return toNumber(signal.explicitMention) > 0 || toNumber(signal.explicitCount) > 0 ? 1 : 0;
 }
 
 function isBrandPlatformSignal(signal: ParsedSignalLike): boolean {
@@ -93,6 +98,13 @@ function parsedSignalsFromRun(run: RunSnapshot): ParsedSignalLike[] {
     return toArray<ParsedSignalLike>(run.analysisData?.parsedSignals);
 }
 
+function hasRunResponses(run: RunSnapshot): boolean {
+    const responses = toArray(run.analysisData?.responses);
+    if (responses.length > 0) return true;
+    const signals = parsedSignalsFromRun(run);
+    return signals.length > 0;
+}
+
 function dayKey(date: Date): string {
     return date.toISOString().slice(0, 10);
 }
@@ -125,6 +137,84 @@ function sentimentLabel(score: number): 'positive' | 'neutral' | 'negative' {
     return 'neutral';
 }
 
+function sentimentScoreFromLabels(labels: Array<'positive' | 'neutral' | 'negative'>): number {
+    if (labels.length === 0) return 50;
+    const total = labels.reduce((sum, label) => {
+        if (label === 'positive') return sum + 100;
+        if (label === 'negative') return sum + 0;
+        return sum + 50;
+    }, 0);
+    return Math.round(total / labels.length);
+}
+
+function normalizeEntityKey(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function parseSentimentLabel(value: unknown): 'positive' | 'neutral' | 'negative' | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'positive' || normalized === 'neutral' || normalized === 'negative') {
+        return normalized;
+    }
+    return null;
+}
+
+function sentimentScoreByCompetitorFromResponses(run: RunSnapshot): Map<string, number> {
+    const responses = toArray<any>(run.analysisData?.responses).filter(
+        (r) => typeof r?.response === 'string' && r.response.trim().length > 0,
+    );
+    const map = new Map<string, Array<'positive' | 'neutral' | 'negative'>>();
+    const ownBrandName =
+        typeof run.companyName === 'string' && run.companyName.trim()
+            ? run.companyName.trim()
+            : (typeof run.analysisData?.company?.name === 'string' ? String(run.analysisData.company.name).trim() : '');
+    const ownBrandKey = ownBrandName ? normalizeEntityKey(ownBrandName) : '';
+
+    responses.forEach((response) => {
+        const sentiment = parseSentimentLabel(response?.sentiment);
+        if (!sentiment) return;
+
+        const seen = new Set<string>();
+        const rankings = toArray<any>(response?.rankings);
+        rankings.forEach((ranking) => {
+            const name = typeof ranking?.company === 'string' ? ranking.company.trim() : '';
+            if (!name) return;
+            const key = normalizeEntityKey(name);
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            const existing = map.get(key) || [];
+            existing.push(sentiment);
+            map.set(key, existing);
+        });
+
+        const competitors = toArray<any>(response?.competitors);
+        competitors.forEach((nameRaw) => {
+            const name = typeof nameRaw === 'string' ? nameRaw.trim() : '';
+            if (!name) return;
+            const key = normalizeEntityKey(name);
+            if (!key || seen.has(key)) return;
+            seen.add(key);
+            const existing = map.get(key) || [];
+            existing.push(sentiment);
+            map.set(key, existing);
+        });
+
+        if (response?.brandMentioned === true && ownBrandKey && !seen.has(ownBrandKey)) {
+            const existing = map.get(ownBrandKey) || [];
+            existing.push(sentiment);
+            map.set(ownBrandKey, existing);
+            seen.add(ownBrandKey);
+        }
+    });
+
+    const scoreMap = new Map<string, number>();
+    map.forEach((labels, key) => {
+        scoreMap.set(key, sentimentScoreFromLabels(labels));
+    });
+    return scoreMap;
+}
+
 function relativeTime(from: Date): string {
     const diffMs = Date.now() - from.getTime();
     const mins = Math.floor(diffMs / (1000 * 60));
@@ -153,6 +243,7 @@ export async function getRunsForAnalytics(input: {
     brandId?: string;
     limit?: number;
 }): Promise<{ runs: RunSnapshot[]; resolvedBrandId?: string }> {
+    logMethodEntry('analyticsService.getRunsForAnalytics', input);
     const limit = Math.max(2, Math.min(200, input.limit ?? 60));
 
     if (input.brandId) {
@@ -161,8 +252,10 @@ export async function getRunsForAnalytics(input: {
             orderBy: desc(brandAnalyses.createdAt),
             limit,
         });
+        const normalized = rows.map(normalizeRun);
+        const withResponses = normalized.filter(hasRunResponses);
         return {
-            runs: rows.map(normalizeRun),
+            runs: withResponses,
             resolvedBrandId: input.brandId,
         };
     }
@@ -184,20 +277,23 @@ export async function getRunsForAnalytics(input: {
         orderBy: desc(brandAnalyses.createdAt),
         limit,
     });
+    const normalized = rows.map(normalizeRun);
+    const withResponses = normalized.filter(hasRunResponses);
 
     return {
-        runs: rows.map(normalizeRun),
+        runs: withResponses,
         resolvedBrandId: inferredBrandId,
     };
 }
 
 export function buildOverviewAnalytics(runs: RunSnapshot[]): AnyObj {
+    logMethodEntry('analyticsService.buildOverviewAnalytics', { runs: runs.length });
     const latest = runs[0];
     if (!latest) return { hasData: false };
     const scores = scoreFromRun(latest);
     const signals = parsedSignalsFromRun(latest);
 
-    const explicitMentions = signals.reduce((sum, s) => sum + (isBrandMentioned(s) ? toNumber(s.explicitCount) : 0), 0);
+    const explicitMentions = signals.reduce((sum, s) => sum + (isBrandMentioned(s) ? explicitMentionPresence(s) : 0), 0);
     const implicitMentions = signals.reduce((sum, s) => sum + (isBrandMentioned(s) ? toNumber(s.implicitMention) : 0), 0);
     const citations = signals.reduce((sum, s) => sum + brandCitationCount(s), 0);
     const opportunities = signals.filter((s) => !s.brandMentioned).length;
@@ -229,6 +325,7 @@ export function buildOverviewAnalytics(runs: RunSnapshot[]): AnyObj {
 }
 
 export function buildVisibilityAnalytics(runs: RunSnapshot[]): AnyObj {
+    logMethodEntry('analyticsService.buildVisibilityAnalytics', { runs: runs.length });
     const latest = runs[0];
     if (!latest) return { hasData: false };
 
@@ -304,7 +401,7 @@ export function buildVisibilityAnalytics(runs: RunSnapshot[]): AnyObj {
         if (!isBrandPlatformSignal(s)) return;
         const provider = s.llmProvider || 'Unknown';
         const entry = providerMap.get(provider) || { explicit: 0, implicit: 0, citations: 0, sentimentSum: 0, sentimentCount: 0 };
-        entry.explicit += toNumber(s.explicitCount);
+        entry.explicit += explicitMentionPresence(s);
         entry.implicit += toNumber(s.implicitMention);
         entry.citations += brandCitationCount(s);
         entry.sentimentSum += toNumber(s.sentimentNormalized, 0.5);
@@ -390,10 +487,12 @@ export function buildVisibilityAnalytics(runs: RunSnapshot[]): AnyObj {
 }
 
 export function buildCompetitorAnalytics(runs: RunSnapshot[]): AnyObj {
+    logMethodEntry('analyticsService.buildCompetitorAnalytics', { runs: runs.length });
     const latest = runs[0];
     if (!latest) return { hasData: false };
 
     const competitors = toArray<any>(latest.analysisData?.competitors ?? latest.competitors);
+    const sentimentByName = sentimentScoreByCompetitorFromResponses(latest);
     const sorted = competitors.slice().sort((a, b) => toNumber(b.visibilityScore) - toNumber(a.visibilityScore));
     const own = sorted.find((c) => c.isOwn) || null;
     const ownRank = own ? sorted.findIndex((c) => c.name === own.name) + 1 : null;
@@ -413,7 +512,7 @@ export function buildCompetitorAnalytics(runs: RunSnapshot[]): AnyObj {
             name: c.name,
             visibility: toNumber(c.visibilityScore),
             mentions: toNumber(c.mentions),
-            sentiment: toNumber(c.sentimentScore),
+            sentiment: sentimentByName.get(normalizeEntityKey(String(c.name))) ?? toNumber(c.sentimentScore, 50),
             avgPos: toNumber(c.averagePosition),
             shareOfVoice: toNumber(c.shareOfVoice),
             isOwn: Boolean(c.isOwn),
@@ -427,6 +526,7 @@ export function buildCompetitorAnalytics(runs: RunSnapshot[]): AnyObj {
 }
 
 export function buildPromptAnalytics(runs: RunSnapshot[]): AnyObj {
+    logMethodEntry('analyticsService.buildPromptAnalytics', { runs: runs.length });
     const latest = runs[0];
     if (!latest) return { hasData: false };
 
@@ -470,7 +570,7 @@ export function buildPromptAnalytics(runs: RunSnapshot[]): AnyObj {
         if (mentioned) {
             existing.providers.add(s.llmProvider || 'Unknown');
         }
-        const explicit = mentioned ? toNumber(s.explicitCount) : 0;
+        const explicit = mentioned ? explicitMentionPresence(s) : 0;
         const implicit = mentioned ? toNumber(s.implicitMention) : 0;
         existing.explicit += explicit;
         existing.implicit += implicit;
@@ -545,7 +645,7 @@ export function buildPromptAnalytics(runs: RunSnapshot[]): AnyObj {
             const visiblePrompts = new Set(
                 signals
                     .filter((s) => isVisibilityEligibleSignal(s))
-                    .filter((s) => toNumber(s.explicitCount) > 0 || toNumber(s.implicitMention) > 0)
+                    .filter((s) => explicitMentionPresence(s) > 0 || toNumber(s.implicitMention) > 0)
                     .map((s) => (s.promptText || '').trim().toLowerCase())
                     .filter(Boolean),
             ).size;
@@ -560,6 +660,10 @@ export function buildPromptAnalytics(runs: RunSnapshot[]): AnyObj {
     return {
         hasData: true,
         latestRunAt: latest.createdAt.toISOString(),
+        brandName:
+            latest.companyName
+            || latest.analysisData?.company?.name
+            || null,
         summary: {
             trackedPrompts: prompts.length,
             avgVisibility: prompts.length
@@ -576,6 +680,7 @@ export function buildPromptAnalytics(runs: RunSnapshot[]): AnyObj {
 }
 
 export function buildSourceAttribution(runs: RunSnapshot[]): AnyObj {
+    logMethodEntry('analyticsService.buildSourceAttribution', { runs: runs.length });
     const latest = runs[0];
     if (!latest) return { hasData: false };
 
@@ -585,14 +690,20 @@ export function buildSourceAttribution(runs: RunSnapshot[]): AnyObj {
     signals.forEach((s) => {
         const text = s.responseText || '';
         const urls = extractUrls(text);
-        const mentionCount = toNumber(s.explicitCount) + toNumber(s.implicitMention);
+        const mentionCount = brandMentionCount(s);
+        const domainsInResponse = new Set<string>();
         urls.forEach((url) => {
             const domain = extractDomain(url);
             if (!domain) return;
+            domainsInResponse.add(domain);
             const current = domainMap.get(domain) || { citations: 0, mentions: 0, urls: new Set<string>() };
-            current.citations += 1;
             current.mentions += mentionCount;
             current.urls.add(url);
+            domainMap.set(domain, current);
+        });
+        domainsInResponse.forEach((domain) => {
+            const current = domainMap.get(domain) || { citations: 0, mentions: 0, urls: new Set<string>() };
+            current.citations += brandCitationCount(s);
             domainMap.set(domain, current);
         });
     });
@@ -619,6 +730,7 @@ export function buildSourceAttribution(runs: RunSnapshot[]): AnyObj {
 }
 
 export function buildAlerts(runs: RunSnapshot[]): AnyObj {
+    logMethodEntry('analyticsService.buildAlerts', { runs: runs.length });
     const latest = runs[0];
     if (!latest) return { hasData: false, alerts: [] };
     const prev = runs[1];

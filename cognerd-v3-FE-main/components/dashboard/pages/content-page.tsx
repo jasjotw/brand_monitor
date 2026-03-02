@@ -34,6 +34,7 @@ export function ContentPage() {
   const [studioOpen, setStudioOpen] = useState(false);
   const [activeTopic, setActiveTopic] = useState("");
   const searchParams = useSearchParams();
+  const globalQuery = (searchParams.get("q") || "").trim().toLowerCase();
 
   // Check for topic in URL (from Backlinks "Generate Blog" button)
   useEffect(() => {
@@ -44,7 +45,18 @@ export function ContentPage() {
     }
   }, [searchParams]);
 
-  const avgScore = Math.round(contentScores.reduce((a, b) => a + b.score, 0) / contentScores.length);
+  const filteredContentScores = contentScores.filter((item) => {
+    const haystack = `${item.title} ${item.url} ${item.status}`.toLowerCase();
+    return !globalQuery || haystack.includes(globalQuery);
+  });
+  const filteredTemplates = templates.filter((t) => {
+    const haystack = `${t.name} ${t.desc}`.toLowerCase();
+    return !globalQuery || haystack.includes(globalQuery);
+  });
+
+  const avgScore = Math.round(
+    (filteredContentScores.reduce((a, b) => a + b.score, 0) / Math.max(1, filteredContentScores.length))
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -58,10 +70,10 @@ export function ContentPage() {
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
         {[
-          { label: "Content Pieces", value: contentScores.length.toString(), icon: <FileText size={16} strokeWidth={1.5} /> },
+          { label: "Content Pieces", value: filteredContentScores.length.toString(), icon: <FileText size={16} strokeWidth={1.5} /> },
           { label: "Avg. AI Score", value: `${avgScore}/100`, icon: <BarChart3 size={16} strokeWidth={1.5} /> },
-          { label: "Total Citations", value: contentScores.reduce((a, b) => a + b.citations, 0).toString(), icon: <Copy size={16} strokeWidth={1.5} /> },
-          { label: "Optimized Pages", value: `${contentScores.filter((c) => c.status === "optimized").length}/${contentScores.length}`, icon: <Sparkles size={16} strokeWidth={1.5} /> },
+          { label: "Total Citations", value: filteredContentScores.reduce((a, b) => a + b.citations, 0).toString(), icon: <Copy size={16} strokeWidth={1.5} /> },
+          { label: "Optimized Pages", value: `${filteredContentScores.filter((c) => c.status === "optimized").length}/${Math.max(1, filteredContentScores.length)}`, icon: <Sparkles size={16} strokeWidth={1.5} /> },
         ].map((stat) => (
           <div key={stat.label} className="card-hover flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/8 text-primary">{stat.icon}</div>
@@ -90,8 +102,8 @@ export function ContentPage() {
             </button>
           </div>
           <div className="flex flex-col">
-            {contentScores.map((item, i) => (
-              <div key={item.url} className={cn("group flex items-center gap-3 px-5 py-3 transition-colors hover:bg-secondary/30", i < contentScores.length - 1 && "border-b border-border/50")}>
+            {filteredContentScores.map((item, i) => (
+              <div key={item.url} className={cn("group flex items-center gap-3 px-5 py-3 transition-colors hover:bg-secondary/30", i < filteredContentScores.length - 1 && "border-b border-border/50")}>
                 {/* Score circle */}
                 <div className="relative flex h-9 w-9 shrink-0 items-center justify-center">
                   <svg className="h-9 w-9 -rotate-90" viewBox="0 0 36 36">
@@ -133,7 +145,7 @@ export function ContentPage() {
             <p className="text-xs text-muted-foreground">AI-optimized content frameworks</p>
           </div>
           <div className="flex flex-col gap-2">
-            {templates.map((t) => (
+            {filteredTemplates.map((t) => (
               <button 
                 key={t.name} 
                 onClick={() => { setActiveTopic(t.name); setStudioOpen(true); }}

@@ -1,8 +1,5 @@
 "use client";
 
-import { cn } from "@/lib/utils";
-import { ExternalLink } from "lucide-react";
-
 interface Source {
   url: string;
   page: string;
@@ -55,12 +52,6 @@ const sources: Source[] = [
   },
 ];
 
-const trendIndicators = {
-  up: { symbol: "\u2191", color: "text-success" },
-  down: { symbol: "\u2193", color: "text-destructive" },
-  stable: { symbol: "\u2192", color: "text-muted-foreground" },
-};
-
 export function SourceAttribution({
   items = sources,
 }: {
@@ -93,7 +84,6 @@ export function SourceAttribution({
             <div className="flex flex-1 flex-col gap-0.5 overflow-hidden">
               <div className="flex items-center gap-1.5">
                 <span className="truncate text-xs font-medium text-foreground">{source.page}</span>
-                <ExternalLink size={10} strokeWidth={1.5} className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
               </div>
               <span className="truncate text-[10px] text-muted-foreground">{source.url}</span>
             </div>
@@ -108,9 +98,6 @@ export function SourceAttribution({
                 <span className="font-medium text-foreground">{source.citations}</span>
                 <span className="text-[10px] text-muted-foreground">citations</span>
               </div>
-              <span className={cn("text-sm font-medium", trendIndicators[source.trend].color)}>
-                {trendIndicators[source.trend].symbol}
-              </span>
             </div>
           </div>
         ))}

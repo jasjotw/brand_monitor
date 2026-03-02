@@ -26,6 +26,9 @@ export const env = {
 
     // Database
     DATABASE_URL: requireEnv('DATABASE_URL'),
+    DB_POOL_MAX: parseInt(optionalEnv('DB_POOL_MAX', '30'), 10),
+    DB_POOL_IDLE_TIMEOUT_MS: parseInt(optionalEnv('DB_POOL_IDLE_TIMEOUT_MS', '30000'), 10),
+    DB_POOL_CONN_TIMEOUT_MS: parseInt(optionalEnv('DB_POOL_CONN_TIMEOUT_MS', '10000'), 10),
 
     // AI Providers
     OPENROUTER_API_KEY: optionalEnv('OPENROUTER_API_KEY'),
@@ -33,8 +36,8 @@ export const env = {
     // Firecrawl
     FIRECRAWL_API_KEY: optionalEnv('FIRECRAWL_API_KEY'),
 
-    // Billing
-    AUTUMN_SECRET_KEY: optionalEnv('AUTUMN_SECRET_KEY'),
+    // Credits
+    INITIAL_FREE_CREDITS: parseInt(optionalEnv('INITIAL_FREE_CREDITS', '100'), 10),
 
     // Auth
     BETTER_AUTH_SECRET: optionalEnv('BETTER_AUTH_SECRET'),
@@ -57,6 +60,7 @@ export const env = {
 
     // Misc
     USE_MOCK_MODE: optionalEnv('USE_MOCK_MODE', 'false') === 'true',
+    BRAND_CREATE_SKIP_SCRAPE: optionalEnv('BRAND_CREATE_SKIP_SCRAPE', 'false') === 'true',
 
     isProd: () => process.env.NODE_ENV === 'production',
 };

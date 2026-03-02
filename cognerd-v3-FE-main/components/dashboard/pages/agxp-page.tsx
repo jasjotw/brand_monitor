@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   connectCloudflare,
@@ -96,6 +97,8 @@ const Input = ({ className, ...props }: React.InputHTMLAttributes<HTMLInputEleme
 
 
 export function AgxpPage() {
+  const searchParams = useSearchParams();
+  const globalQuery = (searchParams.get("q") || "").trim().toLowerCase();
   const [token, setToken] = useState("");
   const [zones, setZones] = useState<any[]>([]);
   const [deployments, setDeployments] = useState<any[]>([]);
@@ -119,6 +122,14 @@ export function AgxpPage() {
   const [instructions, setInstructions] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [generatedPreview, setGeneratedPreview] = useState<{ path: string; content: string; variantId?: number } | null>(null);
+  const filteredDeployments = useMemo(
+    () =>
+      deployments.filter((d: any) => {
+        const haystack = `${d.zoneName} ${d.workerName} ${d.status}`.toLowerCase();
+        return !globalQuery || haystack.includes(globalQuery);
+      }),
+    [deployments, globalQuery]
+  );
 
   useEffect(() => {
     const checkConnection = async () => {
@@ -652,8 +663,13 @@ export function AgxpPage() {
         </AnimatePresence>
 
         <motion.div layout className="grid gap-3">
+          {deployments.length > 0 && filteredDeployments.length === 0 ? (
+            <div className="rounded-2xl border border-border/60 bg-card/60 p-4 text-xs text-muted-foreground">
+              No deployments match current top-bar filters.
+            </div>
+          ) : null}
           <AnimatePresence>
-            {deployments.map((d: any) => (
+            {filteredDeployments.map((d: any) => (
               <motion.div
                 layout
                 initial={{ opacity: 0, y: 10 }}

@@ -2,6 +2,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { brandBacklinkSnapshots, brandprofile } from '../db/schema';
 import { env } from '../config/env';
+import { logMethodEntry } from '../utils/logger';
 
 const COLOR_PALETTE = ['#F97316', '#ECA17A', '#FFD5B5', '#92B6B1', '#8BB6E8', '#C6A5D9'];
 
@@ -427,6 +428,7 @@ export async function getCurrentBacklinks(input: {
     userId: string;
     brandId?: string;
 }): Promise<BacklinksResponse> {
+    logMethodEntry('backlinksService.getCurrentBacklinks', input);
     const profile = await getUserBrandProfile(input.userId, input.brandId);
     if (!profile) {
         return emptyResponse(null);
@@ -461,6 +463,7 @@ export async function refreshCurrentBacklinks(input: {
     userId: string;
     brandId?: string;
 }): Promise<BacklinksResponse> {
+    logMethodEntry('backlinksService.refreshCurrentBacklinks', input);
     const profile = await getUserBrandProfile(input.userId, input.brandId);
     if (!profile) {
         return emptyResponse(null);
@@ -488,4 +491,18 @@ export async function refreshCurrentBacklinks(input: {
         source: 'fetched',
         ...snapshot,
     };
+}
+
+export async function getRefreshCompetitorCount(input: {
+    userId: string;
+    brandId?: string;
+}): Promise<number> {
+    const profile = await getUserBrandProfile(input.userId, input.brandId);
+    if (!profile) return 0;
+    const competitors = parsePreloadedCompetitors({
+        brandName: profile.name,
+        brandUrl: profile.url,
+        competitorsRaw: profile.competitors,
+    });
+    return Math.max(0, competitors.filter((c) => !c.isOwn).length);
 }

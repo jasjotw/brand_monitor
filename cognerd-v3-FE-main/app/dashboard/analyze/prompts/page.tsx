@@ -23,6 +23,11 @@ type BrandPrompt = {
   source?: string;
 };
 
+type PromptWithStatus = BrandPrompt & {
+  status?: "pending" | "completed";
+  isNew?: boolean;
+};
+
 type Competitor = { name: string; url?: string };
 
 type BrandRecord = {
@@ -91,6 +96,23 @@ function normalizePrompts(value: unknown): BrandPrompt[] {
   return out;
 }
 
+function normalizePromptsWithStatus(value: unknown): PromptWithStatus[] {
+  return normalizePrompts(value).map((prompt) => {
+    const raw = (Array.isArray(value) ? value : []).find((entry) => {
+      if (!entry || typeof entry !== "object") return false;
+      const candidate = entry as { id?: unknown; prompt?: unknown };
+      const promptId = typeof candidate.id === "string" ? candidate.id : "";
+      const promptText = typeof candidate.prompt === "string" ? candidate.prompt.trim() : "";
+      return (promptId && promptId === prompt.id) || (promptText && promptText === prompt.prompt);
+    }) as { status?: unknown; isNew?: unknown } | undefined;
+    return {
+      ...prompt,
+      status: raw?.status === "completed" ? "completed" : "pending",
+      isNew: raw?.isNew === true,
+    };
+  });
+}
+
 function parseCompetitors(value: unknown): Competitor[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -127,7 +149,9 @@ export default function AnalyzePromptsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [brand, setBrand] = useState<BrandRecord | null>(null);
-  const [prompts, setPrompts] = useState<BrandPrompt[]>([]);
+  const [prompts, setPrompts] = useState<PromptWithStatus[]>([]);
+  const [hasPendingPrompts, setHasPendingPrompts] = useState(false);
+  const [loadingPromptAction, setLoadingPromptAction] = useState(false);
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [runMessage, setRunMessage] = useState<string>("Ready to run prompts.");
@@ -150,7 +174,7 @@ export default function AnalyzePromptsPage() {
     return Array.from(map.entries()).map(([category, count]) => ({ category, count }));
   }, [prompts]);
 
-  function updatePromptById(id: string, patch: Partial<BrandPrompt>) {
+  function updatePromptById(id: string, patch: Partial<PromptWithStatus>) {
     setPrompts((prev) =>
       prev.map((row) => (row.id === id ? { ...row, ...patch } : row)),
     );
@@ -167,11 +191,12 @@ export default function AnalyzePromptsPage() {
   }
 
   function addPrompt() {
-    const newPrompt: BrandPrompt = {
+    const newPrompt: PromptWithStatus = {
       id: `new-${Date.now()}`,
       prompt: "",
       category: "category_authority",
       source: "user",
+      status: "pending",
     };
     setPrompts((prev) => [...prev, newPrompt]);
     setEditModeById((prev) => ({ ...prev, [newPrompt.id]: true }));
@@ -200,7 +225,7 @@ export default function AnalyzePromptsPage() {
     return res;
   }
 
-  function persistPrompts(nextPrompts: BrandPrompt[]) {
+  function persistPrompts(nextPrompts: PromptWithStatus[]) {
     localStorage.setItem("brand_monitor_generated_prompts", JSON.stringify(nextPrompts));
   }
 
@@ -257,6 +282,44 @@ export default function AnalyzePromptsPage() {
     persistPrompts(prompts);
   }, [prompts, loading]);
 
+  async function generatePromptSet(action: "generate_new" | "add_10_new", autoRun = false) {
+    const res = await authedFetch("/api/brand-monitor/audience/prompts/manage", {
+      method: "POST",
+      body: JSON.stringify({ action }),
+    });
+    if (!res) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error?.message || data?.error || "Failed to generate prompts.");
+    }
+    const nextPrompts = normalizePromptsWithStatus(data?.pendingPrompts || data?.prompts);
+    setPrompts(nextPrompts);
+    setHasPendingPrompts(nextPrompts.length > 0);
+    setEditModeById({});
+    if (autoRun) {
+      window.setTimeout(() => {
+        runPromptsOnLlm(nextPrompts);
+      }, 0);
+    }
+  }
+
+  async function loadPromptState() {
+    const stateRes = await authedFetch("/api/brand-monitor/audience/prompts/current", { method: "GET" });
+    if (!stateRes) return;
+    const stateData = await stateRes.json().catch(() => ({}));
+    if (!stateRes.ok) {
+      throw new Error(stateData?.error?.message || stateData?.error || "Failed to load prompt state.");
+    }
+
+    const pendingPrompts = normalizePromptsWithStatus(stateData?.pendingPrompts);
+    if (pendingPrompts.length > 0) {
+      setPrompts(pendingPrompts);
+      setHasPendingPrompts(true);
+      return;
+    }
+
+    await generatePromptSet("generate_new");
+  }
 
   useEffect(() => {
     (async () => {
@@ -271,22 +334,7 @@ export default function AnalyzePromptsPage() {
           throw new Error(profileData?.error?.message || profileData?.error || "Failed to load brand profile.");
         }
         setBrand(profileData?.brand ?? null);
-
-        const localRaw = localStorage.getItem("brand_monitor_generated_prompts");
-        const localPrompts = normalizePrompts(localRaw ? JSON.parse(localRaw) : []);
-        if (localPrompts.length > 0) {
-          setPrompts(localPrompts);
-          return;
-        }
-
-        const promptRes = await authedFetch("/api/brand-monitor/audience/generate-prompts", { method: "POST" });
-        if (!promptRes) return;
-        const promptData = await promptRes.json().catch(() => ({}));
-        if (!promptRes.ok) {
-          throw new Error(promptData?.error?.message || promptData?.error || "Failed to generate prompts.");
-        }
-        const nextPrompts = normalizePrompts(promptData?.prompts);
-        setPrompts(nextPrompts);
+        await loadPromptState();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load prompts.");
       } finally {
@@ -295,7 +343,7 @@ export default function AnalyzePromptsPage() {
     })();
   }, []);
 
-  async function runPromptsOnLlm() {
+  async function runPromptsOnLlm(promptsToRun?: PromptWithStatus[]) {
     try {
       setRunError(null);
       setRunning(true);
@@ -307,7 +355,8 @@ export default function AnalyzePromptsPage() {
       setTransitionInPrompt(null);
       setProviderCompletionByPrompt({});
 
-      const cleanedPrompts = prompts
+      const sourcePrompts = promptsToRun ?? prompts;
+      const cleanedPrompts = sourcePrompts
         .map((p, idx) => ({
           id: p.id || `prompt-${idx + 1}`,
           prompt: p.prompt.trim(),
@@ -324,7 +373,7 @@ export default function AnalyzePromptsPage() {
         throw new Error("Add at least one prompt before running analysis.");
       }
 
-      persistPrompts(cleanedPrompts as BrandPrompt[]);
+      persistPrompts(cleanedPrompts as PromptWithStatus[]);
       const orderedPromptTexts = cleanedPrompts.map((p) => p.prompt);
       setRunPromptOrder(orderedPromptTexts);
       activePromptIndexRef.current = 0;
@@ -424,6 +473,22 @@ export default function AnalyzePromptsPage() {
           if (typeof parsed.data?.message === "string" && parsed.data.message.trim()) {
             setRunMessage(parsed.data.message);
           }
+          if (type === "prompt-dequeued" && eventPrompt) {
+            setRunMessage(`Running prompt: ${eventPrompt}`);
+            if (eventPromptIndex > 0) {
+              const nextIdx = Math.max(0, eventPromptIndex - 1);
+              activePromptIndexRef.current = nextIdx;
+              setActivePromptIndex(nextIdx);
+            }
+          }
+          if (type === "prompt-complete" && eventPrompt) {
+            setRunMessage(`Completed prompt: ${eventPrompt}`);
+            triggerPromptAdvance(eventPrompt);
+          }
+          if (type === "prompt-failed" && eventPrompt) {
+            setRunMessage(`Prompt finished with failures: ${eventPrompt}`);
+            triggerPromptAdvance(eventPrompt);
+          }
           if (type === "analysis-start" && eventPrompt) {
             setRunMessage(`Examining prompt: ${eventPrompt}`);
             if (eventPromptIndex > 0) {
@@ -435,22 +500,10 @@ export default function AnalyzePromptsPage() {
             }
           }
           if (type === "analysis-complete" && eventPrompt) {
-            const totalProviders = Number(parsed.data?.totalProviders || 1);
-            const status = String(parsed.data?.status || "");
             setProviderCompletionByPrompt((prev) => {
               const key = promptKey(eventPrompt);
               const nextCount = (prev[key] || 0) + 1;
               const next = { ...prev, [key]: nextCount };
-              if (nextCount >= Math.max(1, totalProviders)) {
-                triggerPromptAdvance(eventPrompt);
-              }
-              // Fallback: if provider counting is inconsistent, still advance when current prompt reports completion.
-              if (
-                status === "completed" &&
-                promptKey(eventPrompt) === promptKey(runPromptOrder[activePromptIndexRef.current] || "")
-              ) {
-                window.setTimeout(() => triggerPromptAdvance(eventPrompt), 200);
-              }
               return next;
             });
           }
@@ -462,6 +515,7 @@ export default function AnalyzePromptsPage() {
           if (type === "complete") {
             setRunProgress(100);
             setRunMessage("Analysis complete. Saved to database.");
+            setHasPendingPrompts(false);
             setTimeout(() => router.push("/dashboard"), 500);
           }
           rawEvent = takeNextEventBlock();
@@ -472,6 +526,30 @@ export default function AnalyzePromptsPage() {
       setRunMessage("Run failed.");
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function handleGenerateNew() {
+    try {
+      setLoadingPromptAction(true);
+      setError(null);
+      await generatePromptSet("generate_new");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate new prompts.");
+    } finally {
+      setLoadingPromptAction(false);
+    }
+  }
+
+  async function handleAdd10AndRun() {
+    try {
+      setLoadingPromptAction(true);
+      setError(null);
+      await generatePromptSet("add_10_new", true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add new prompts.");
+    } finally {
+      setLoadingPromptAction(false);
     }
   }
 
@@ -496,21 +574,52 @@ export default function AnalyzePromptsPage() {
           <div>
             <h2 className="text-lg font-semibold text-foreground">Prompt Editor</h2>
             <p className="text-xs text-muted-foreground">
-              Categories are shown per prompt. Edit, delete, or add prompts before running.
+              {hasPendingPrompts
+                ? "Pending prompts found from previous generation. Continue, replace, or append before running."
+                : "Categories are shown per prompt. Edit, delete, or add prompts before running."}
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {hasPendingPrompts ? (
+              <>
+                <button
+                  type="button"
+                  onClick={handleGenerateNew}
+                  disabled={running || loadingPromptAction}
+                  className="h-9 rounded-lg border border-border px-3 text-xs font-semibold text-foreground hover:bg-secondary disabled:opacity-60"
+                >
+                  {loadingPromptAction ? "Working..." : "Generate New"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runPromptsOnLlm()}
+                  disabled={running || loadingPromptAction}
+                  className="h-9 rounded-lg border border-border px-3 text-xs font-semibold text-foreground hover:bg-secondary disabled:opacity-60"
+                >
+                  Continue With These
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAdd10AndRun}
+                  disabled={running || loadingPromptAction}
+                  className="h-9 rounded-lg border border-border px-3 text-xs font-semibold text-foreground hover:bg-secondary disabled:opacity-60"
+                >
+                  {loadingPromptAction ? "Working..." : "Add 10 New Prompts"}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={addPrompt}
+                className="h-9 rounded-lg border border-border px-3 text-xs font-semibold text-foreground hover:bg-secondary disabled:opacity-60"
+              >
+                Add Prompt
+              </button>
+            )}
             <button
               type="button"
-              onClick={addPrompt}
-              className="h-9 rounded-lg border border-border px-3 text-xs font-semibold text-foreground hover:bg-secondary disabled:opacity-60"
-            >
-              Add Prompt
-            </button>
-            <button
-              type="button"
-              onClick={runPromptsOnLlm}
-              disabled={running}
+              onClick={() => runPromptsOnLlm()}
+              disabled={running || loadingPromptAction}
               className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-3 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {running ? (
@@ -519,7 +628,7 @@ export default function AnalyzePromptsPage() {
                   Running...
                 </>
               ) : (
-                "Run Prompts On LLM"
+                hasPendingPrompts ? "Run Pending Prompts" : "Run Prompts On LLM"
               )}
             </button>
           </div>
@@ -644,10 +753,24 @@ export default function AnalyzePromptsPage() {
               <div key={row.id} className="relative">
                 <div className="pointer-events-none absolute inset-x-2 top-2 h-full rounded-xl border border-border/40 bg-secondary/40" />
                 <div className="pointer-events-none absolute inset-x-1 top-1 h-full rounded-xl border border-border/60 bg-secondary/30" />
-                <div className="relative rounded-xl border border-border bg-background p-4 shadow-sm">
+                <div className={`relative rounded-xl border p-4 shadow-sm ${
+                  row.status === "pending"
+                    ? "border-border/80 bg-muted/40"
+                    : "border-border bg-background"
+                }`}>
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="text-xs font-semibold text-foreground">Prompt {index + 1}</p>
                     <div className="flex items-center gap-2">
+                      {row.status === "pending" ? (
+                        <span className="rounded-full border border-border bg-card px-2 py-1 text-[10px] font-semibold text-muted-foreground">
+                          Pending
+                        </span>
+                      ) : null}
+                      {row.isNew ? (
+                        <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-700">
+                          New
+                        </span>
+                      ) : null}
                       <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold ${categoryClass(row.category)}`}>
                         {categoryLabel(row.category)}
                       </span>
@@ -722,7 +845,7 @@ export default function AnalyzePromptsPage() {
 
       {showRunnerModal && (
         <div className="absolute inset-0 z-50 flex justify-center bg-background/70 p-3 pt-2 backdrop-blur-sm sm:p-4 sm:pt-3">
-          <div className="w-full max-w-5xl rounded-2xl border border-border bg-card p-3 shadow-2xl sm:p-4">
+          <div className="w-full max-w-5xl rounded-2xl border border-border bg-card p-3 shadow-2xl sm:p-3.5">
             <div className="mb-4 flex items-center justify-between gap-2">
               <div>
                 <h3 className="text-sm font-semibold text-foreground">LLM Prompt Runner</h3>
@@ -738,7 +861,7 @@ export default function AnalyzePromptsPage() {
               </button>
             </div>
 
-            <div className="rounded-2xl border border-border bg-background p-3 sm:p-4">
+            <div className="rounded-2xl border border-border bg-background p-3 sm:p-3.5">
               <div className="flex flex-col items-center">
                 <img src="/images/running.gif" alt="Running prompts" className="h-28 w-28 object-contain sm:h-32 sm:w-32" />
                 <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -797,13 +920,13 @@ export default function AnalyzePromptsPage() {
               </div>
             </div>
 
-            <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-secondary">
+            <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-secondary">
               <div
                 className="h-full rounded-full bg-primary transition-all duration-500"
                 style={{ width: `${runProgress}%` }}
               />
             </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-[11px] leading-4 text-muted-foreground">
               Stage: {runStage} | Progress: {Math.round(runProgress)}%
             </p>
             {runError ? (
@@ -821,17 +944,17 @@ export default function AnalyzePromptsPage() {
           grid-template-columns: 1fr 1.2fr 1fr;
           gap: 12px;
           align-items: center;
-          min-height: 210px;
+          min-height: 178px;
         }
         .runner-slot {
           display: flex;
           align-items: center;
           justify-content: center;
-          min-height: 170px;
+          min-height: 144px;
         }
         .credit-card {
           width: 270px;
-          height: 152px;
+          height: 142px;
           border-radius: 18px;
           border: 1px solid hsl(var(--border));
           background: linear-gradient(
@@ -840,13 +963,13 @@ export default function AnalyzePromptsPage() {
             color-mix(in oklab, hsl(var(--card)) 82%, hsl(var(--secondary)) 18%) 100%
           );
           box-shadow: 0 16px 38px rgba(0, 0, 0, 0.08);
-          padding: 12px;
+          padding: 11px;
           position: relative;
           overflow: hidden;
         }
         .credit-card-current {
           width: 300px;
-          height: 172px;
+          height: 160px;
           border-color: color-mix(in oklab, hsl(var(--primary)) 34%, hsl(var(--border)) 66%);
         }
         .credit-card-done {
@@ -865,20 +988,21 @@ export default function AnalyzePromptsPage() {
         }
         .credit-card-text {
           font-size: 11px;
-          line-height: 1.4;
+          line-height: 1.45;
           color: hsl(var(--foreground));
+          margin: 0;
           display: -webkit-box;
-          -webkit-line-clamp: 5;
+          -webkit-line-clamp: 4;
           -webkit-box-orient: vertical;
           overflow: hidden;
         }
         .credit-layer {
           position: absolute;
-          inset: 30px 10px 10px 10px;
+          inset: 34px 10px 10px 10px;
           border-radius: 12px;
           border: 1px solid color-mix(in oklab, hsl(var(--border)) 88%, hsl(var(--primary)) 12%);
           background: hsl(var(--card));
-          padding: 10px;
+          padding: 10px 11px;
         }
         .credit-static {
           transform: translateX(0);
@@ -896,15 +1020,15 @@ export default function AnalyzePromptsPage() {
             gap: 12px;
           }
           .runner-slot {
-            min-height: 150px;
+            min-height: 132px;
           }
           .credit-card {
             width: 100%;
             max-width: 500px;
-            height: 144px;
+            height: 132px;
           }
           .credit-card-current {
-            height: 162px;
+            height: 148px;
           }
           .credit-card-text {
             -webkit-line-clamp: 4;
@@ -912,13 +1036,13 @@ export default function AnalyzePromptsPage() {
         }
         @media (max-width: 640px) {
           .credit-card {
-            height: 138px;
+            height: 126px;
           }
           .credit-card-current {
-            height: 152px;
+            height: 140px;
           }
           .credit-layer {
-            inset: 28px 8px 8px 8px;
+            inset: 32px 8px 8px 8px;
           }
         }
         .run-card {

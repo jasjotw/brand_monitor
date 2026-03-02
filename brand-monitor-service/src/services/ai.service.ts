@@ -40,12 +40,121 @@ import {
 } from '../utils/brand-detection.utils';
 import { validateCompetitorUrl } from '../utils/url.utils';
 import { calculateSentimentScore, determineSentiment } from '../utils/sentiment.utils';
+import { logError, logInfo, logWarn } from '../utils/logger';
 import {
     PROMPT_GENERATION_SYSTEM_PROMPT,
     PERSONA_GENERATION_SYSTEM_PROMPT,
 } from '../prompts';
 
 const MAX_GENERATED_PROMPTS = 20;
+
+type LlmCallMeta = {
+    operation: string;
+    provider?: string;
+    model?: string;
+    attempt?: number;
+    maxAttempts?: number;
+    useWebSearch?: boolean;
+};
+
+function estimateTokensFromText(value: string): number {
+    if (!value) return 0;
+    // Fast heuristic (~4 chars/token average for English).
+    return Math.ceil(value.length / 4);
+}
+
+function estimateInputTokens(params: any): number {
+    const segments: string[] = [];
+    const pushIfString = (v: unknown) => {
+        if (typeof v === 'string' && v.trim()) segments.push(v);
+    };
+    pushIfString(params?.prompt);
+    pushIfString(params?.system);
+    if (Array.isArray(params?.messages)) {
+        params.messages.forEach((m: any) => {
+            if (!m) return;
+            pushIfString(m?.content);
+            if (Array.isArray(m?.content)) {
+                m.content.forEach((part: any) => pushIfString(part?.text));
+            }
+        });
+    }
+    return segments.reduce((sum, text) => sum + estimateTokensFromText(text), 0);
+}
+
+function inferModelName(model: unknown): string {
+    if (!model || typeof model !== 'object') return 'unknown';
+    const candidate = model as Record<string, unknown>;
+    const value =
+        candidate.modelId
+        || candidate.id
+        || candidate.name
+        || candidate.model
+        || candidate.providerModelId;
+    return typeof value === 'string' && value.trim() ? value.trim() : 'unknown';
+}
+
+function extractUsage(result: unknown): Record<string, number> | undefined {
+    const candidate = (result as any)?.usage ?? (result as any)?.totalUsage ?? (result as any)?.providerMetadata?.usage;
+    if (!candidate || typeof candidate !== 'object') return undefined;
+    const source = candidate as Record<string, unknown>;
+    const usage: Record<string, number> = {};
+    const keys = ['inputTokens', 'outputTokens', 'promptTokens', 'completionTokens', 'totalTokens', 'reasoningTokens', 'cachedInputTokens'];
+    keys.forEach((key) => {
+        const value = Number(source[key]);
+        if (Number.isFinite(value) && value >= 0) usage[key] = value;
+    });
+    return Object.keys(usage).length > 0 ? usage : undefined;
+}
+
+async function loggedGenerateText(meta: LlmCallMeta, params: any): Promise<any> {
+    const started = Date.now();
+    logInfo('LLM_CALL_START', {
+        ...meta,
+        estimatedInputTokens: estimateInputTokens(params),
+    });
+    try {
+        const result = await generateText(params as any);
+        logInfo('LLM_CALL_SUCCESS', {
+            ...meta,
+            durationMs: Date.now() - started,
+            usage: extractUsage(result),
+            textLength: typeof (result as any)?.text === 'string' ? (result as any).text.length : 0,
+        });
+        return result;
+    } catch (error) {
+        logWarn('LLM_CALL_FAIL', {
+            ...meta,
+            durationMs: Date.now() - started,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+    }
+}
+
+async function loggedGenerateObject(meta: LlmCallMeta, params: any): Promise<any> {
+    const started = Date.now();
+    logInfo('LLM_CALL_START', {
+        ...meta,
+        estimatedInputTokens: estimateInputTokens(params),
+    });
+    try {
+        const result = await generateObject(params as any);
+        logInfo('LLM_CALL_SUCCESS', {
+            ...meta,
+            durationMs: Date.now() - started,
+            usage: extractUsage(result),
+        });
+        return result;
+    } catch (error) {
+        logWarn('LLM_CALL_FAIL', {
+            ...meta,
+            durationMs: Date.now() - started,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+    }
+}
 
 function normalizePromptCategory(value: unknown): BrandPrompt['category'] {
     const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -244,7 +353,11 @@ Rules:
 - Return only valid JSON:
 {"competitors":[{"name":"Competitor Name","url":"domain.com"}]}`;
 
-    const localObject = await generateObject({
+    const localObject = await loggedGenerateObject({
+        operation: 'identifyCompetitorDetails.local',
+        provider: 'preferred:openai',
+        model: inferModelName(model),
+    }, {
         model,
         schema: GeoCompetitorSchema,
         prompt: localPrompt,
@@ -265,7 +378,11 @@ Rules:
 - Return only valid JSON:
 {"competitors":[{"name":"Competitor Name","url":"domain.com"}]}`;
 
-    const globalObject = await generateObject({
+    const globalObject = await loggedGenerateObject({
+        operation: 'identifyCompetitorDetails.global',
+        provider: 'preferred:openai',
+        model: inferModelName(model),
+    }, {
         model,
         schema: GeoCompetitorSchema,
         prompt: globalPrompt,
@@ -362,10 +479,14 @@ ${competitors.map((name) => `- ${name}`).join('\n')}
 `;
 
     try {
-        const { object } = await generateObject({ model, schema: CompetitorUrlSchema, prompt, temperature: 0.2 });
+        const { object } = await loggedGenerateObject({
+            operation: 'resolveCompetitorUrlsFromNames',
+            provider: 'preferred:openai',
+            model: inferModelName(model),
+        }, { model, schema: CompetitorUrlSchema, prompt, temperature: 0.2 });
 
         const urlByName = new Map<string, string | undefined>();
-        object.competitors.forEach((entry) => {
+        object.competitors.forEach((entry: any) => {
             const nameKey = entry.name.trim().toLowerCase();
             const cleaned = entry.url ? validateCompetitorUrl(entry.url) : undefined;
             if (nameKey) urlByName.set(nameKey, cleaned);
@@ -400,7 +521,11 @@ export async function generatePersonasForBrand(company: Company): Promise<Person
     });
 
     try {
-        const { text } = await generateText({
+        const { text } = await loggedGenerateText({
+            operation: 'generatePersonasForBrand',
+            provider: 'preferred:google',
+            model: inferModelName(model),
+        }, {
             model,
             system: 'You are a marketing strategist. Return only valid JSON.',
             prompt: systemPrompt,
@@ -613,7 +738,11 @@ Return valid JSON:
 "priority_segments": []
 }`;
 
-    const { object } = await generateObject({
+    const { object } = await loggedGenerateObject({
+        operation: 'generateIcpForBrand',
+        provider: 'preferred:google',
+        model: inferModelName(model),
+    }, {
         model,
         schema: RichICPSchema,
         prompt,
@@ -707,7 +836,11 @@ Rules:
 - Keep it concise and realistic (8-16 words).
 `;
 
-    const { object } = await generateObject({
+    const { object } = await loggedGenerateObject({
+        operation: 'generateBaseQueryForBrand',
+        provider: 'preferred:google',
+        model: inferModelName(model),
+    }, {
         model,
         schema: BaseQuerySchema,
         prompt,
@@ -758,7 +891,11 @@ export async function generatePromptsForCompany(
         icp: icp ?? undefined,
     });
 
-    const { text } = await generateText({
+    const { text } = await loggedGenerateText({
+        operation: 'generatePromptsForCompany',
+        provider: 'preferred:google',
+        model: inferModelName(model),
+    }, {
         model,
         system: 'You are a helpful assistant that generates JSON. Only return valid JSON.',
         prompt: systemPrompt,
@@ -919,7 +1056,13 @@ Respond strictly in JSON format:
         let text = '';
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                const result = await generateText({
+                const result = await loggedGenerateText({
+                    operation: 'analyzePromptWithProvider.answer',
+                    provider: normalizedProvider,
+                    model: inferModelName(model),
+                    attempt,
+                    maxAttempts,
+                }, {
                     model,
                     system: systemPrompt,
                     prompt: `Now answer this query:\n\n${prompt}`,
@@ -944,9 +1087,18 @@ Respond strictly in JSON format:
             // Use preferred provider for structured analysis (Ollama if enabled, else google/gemini)
             const analysisPreferred = getPreferredProvider('google');
             const analysisModel = (analysisPreferred?.model) || model;
-            const result = await generateObject({ model: analysisModel, schema: RankingSchema, prompt: analysisPrompt, temperature: 0.3, maxRetries: 2 });
+            const result = await loggedGenerateObject({
+                operation: 'analyzePromptWithProvider.structured-analysis',
+                provider: normalizedProvider,
+                model: inferModelName(analysisModel),
+            }, { model: analysisModel, schema: RankingSchema, prompt: analysisPrompt, temperature: 0.3, maxRetries: 2 });
             object = result.object;
-        } catch {
+        } catch (error) {
+            logWarn('LLM_FALLBACK_TRIGGERED', {
+                operation: 'analyzePromptWithProvider.structured-analysis',
+                provider: normalizedProvider,
+                reason: error instanceof Error ? error.message : String(error),
+            });
             const brandDetection = detectBrandMention(text, brandName, _buildDetectionOptions(brandName, brandUrls));
             return _buildFallbackResponse(provider, prompt, text, brandName, competitors, competitorUrlMap, brandDetection, brandUrls);
         }
@@ -1067,14 +1219,24 @@ When responding to prompts about tools, platforms, or services:
         : prompt;
 
     try {
-        const { text } = await generateText({ model, system: systemPrompt, prompt: enhancedPrompt, temperature: 0.7, maxTokens: 800 });
+        const { text } = await loggedGenerateText({
+            operation: 'analyzePromptWithProviderEnhanced.answer',
+            provider: normalizedProvider,
+            model: inferModelName(model),
+            useWebSearch,
+        }, { model, system: systemPrompt, prompt: enhancedPrompt, temperature: 0.7, maxTokens: 800 });
 
         let object: any;
         try {
             // Use preferred provider for structured analysis (Ollama if enabled, else openai)
             const analysisPreferred = getPreferredProvider('openai');
             if (!analysisPreferred) throw new Error('Analysis model not available');
-            const result = await generateObject({
+            const result = await loggedGenerateObject({
+                operation: 'analyzePromptWithProviderEnhanced.structured-analysis',
+                provider: normalizedProvider,
+                model: inferModelName(analysisPreferred.model),
+                useWebSearch,
+            }, {
                 model: analysisPreferred.model,
                 system: 'You are an expert at analyzing text and extracting structured information about companies and rankings.',
                 prompt: buildAnalysisPrompt(brandName, text, competitors),
@@ -1082,7 +1244,12 @@ When responding to prompts about tools, platforms, or services:
                 temperature: 0.3,
             });
             object = result.object;
-        } catch {
+        } catch (error) {
+            logWarn('LLM_FALLBACK_TRIGGERED', {
+                operation: 'analyzePromptWithProviderEnhanced.structured-analysis',
+                provider: normalizedProvider,
+                reason: error instanceof Error ? error.message : String(error),
+            });
             const brandNameLower = brandName.toLowerCase();
             const textLower = text.toLowerCase();
             const mentioned =

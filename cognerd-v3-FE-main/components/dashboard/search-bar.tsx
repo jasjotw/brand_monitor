@@ -8,6 +8,12 @@ import { cn } from "@/lib/utils";
 interface SearchBarProps {
   isOpen: boolean;
   onClose: () => void;
+  query: string;
+  onQueryChange: (value: string) => void;
+  selectedDateValue: string;
+  onDateChange: (value: string) => void;
+  selectedPlatformValue: string;
+  onPlatformChange: (value: string) => void;
 }
 
 const dateOptions = [
@@ -37,11 +43,22 @@ const listVariants = {
   },
 };
 
-export function SearchBar({ isOpen, onClose }: SearchBarProps) {
+export function SearchBar({
+  isOpen,
+  onClose,
+  query,
+  onQueryChange,
+  selectedDateValue,
+  onDateChange,
+  selectedPlatformValue,
+  onPlatformChange,
+}: SearchBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [activeDropdown, setActiveDropdown] = useState<"date" | "platform" | null>(null);
-  const [selectedDate, setSelectedDate] = useState("Last 7 days");
-  const [selectedPlatform, setSelectedPlatform] = useState("All Platforms");
+  const selectedDateLabel =
+    dateOptions.find((opt) => opt.value === selectedDateValue)?.label || "Last 7 days";
+  const selectedPlatformLabel =
+    platformOptions.find((opt) => opt.value === selectedPlatformValue)?.label || "All Platforms";
 
   // Generate random shuffle offsets for the platform items
   const shuffleOffsets = useMemo(() => 
@@ -108,6 +125,8 @@ export function SearchBar({ isOpen, onClose }: SearchBarProps) {
               ref={inputRef}
               type="text"
               placeholder="Search dashboard..."
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
               className="flex-1 bg-transparent text-[14px] outline-none placeholder:text-muted-foreground/60"
             />
           </div>
@@ -126,7 +145,7 @@ export function SearchBar({ isOpen, onClose }: SearchBarProps) {
                 )}
               >
                 <Calendar size={12} strokeWidth={1.5} className={cn(activeDropdown === "date" ? "text-primary" : "text-muted-foreground")} />
-                <span>{selectedDate}</span>
+                <span>{selectedDateLabel}</span>
                 <ChevronDown size={10} strokeWidth={1.5} className={cn("transition-transform", activeDropdown === "date" && "rotate-180")} />
               </button>
 
@@ -148,13 +167,13 @@ export function SearchBar({ isOpen, onClose }: SearchBarProps) {
                             visible: { opacity: 1, x: 0 }
                           }}
                           onClick={() => {
-                            setSelectedDate(opt.label);
+                            onDateChange(opt.value);
                             setActiveDropdown(null);
                           }}
                           className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[12px] font-medium text-sidebar-muted transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
                         >
                           {opt.label}
-                          {selectedDate === opt.label && <Check size={12} className="text-primary" />}
+                          {selectedDateValue === opt.value && <Check size={12} className="text-primary" />}
                         </motion.button>
                       ))}
                     </motion.div>
@@ -173,7 +192,7 @@ export function SearchBar({ isOpen, onClose }: SearchBarProps) {
                 )}
               >
                 <Globe size={12} strokeWidth={1.5} className={cn(activeDropdown === "platform" ? "text-primary" : "text-muted-foreground")} />
-                <span>{selectedPlatform}</span>
+                <span>{selectedPlatformLabel}</span>
                 <ChevronDown size={10} strokeWidth={1.5} className={cn("transition-transform", activeDropdown === "platform" && "rotate-180")} />
               </button>
 
@@ -208,7 +227,7 @@ export function SearchBar({ isOpen, onClose }: SearchBarProps) {
                             }
                           }}
                           onClick={() => {
-                            setSelectedPlatform(opt.label);
+                            onPlatformChange(opt.value);
                             setActiveDropdown(null);
                           }}
                           className="group/item flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12px] font-medium text-sidebar-muted transition-all hover:bg-sidebar-accent hover:text-sidebar-foreground"
@@ -217,10 +236,10 @@ export function SearchBar({ isOpen, onClose }: SearchBarProps) {
                             className="h-2 w-2 shrink-0 rounded-full transition-transform group-hover/item:scale-125" 
                             style={{ backgroundColor: opt.color }} 
                           />
-                          <span className="flex-1" style={{ color: selectedPlatform === opt.label ? opt.color : undefined }}>
+                          <span className="flex-1" style={{ color: selectedPlatformValue === opt.value ? opt.color : undefined }}>
                             {opt.label}
                           </span>
-                          {selectedPlatform === opt.label && <Check size={12} style={{ color: opt.color }} />}
+                          {selectedPlatformValue === opt.value && <Check size={12} style={{ color: opt.color }} />}
                         </motion.button>
                       ))}
                     </motion.div>
