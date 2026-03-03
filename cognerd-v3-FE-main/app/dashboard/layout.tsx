@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -31,7 +31,7 @@ const pageConfig: Record<string, { title: string; subtitle: string }> = {
   "/dashboard/analyze/prompts": { title: "Analysis Prompts", subtitle: "Review, edit, and run prompts on AI providers" },
 };
 
-export default function DashboardLayout({
+function DashboardLayoutInner({
   children,
 }: {
   children: React.ReactNode;
@@ -652,5 +652,17 @@ export default function DashboardLayout({
         </div>
       </div>
     </div>
+  );
+}
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <Suspense fallback={<div className="flex h-screen items-center justify-center bg-background text-xs text-muted-foreground">Loading dashboard...</div>}>
+      <DashboardLayoutInner>{children}</DashboardLayoutInner>
+    </Suspense>
   );
 }
