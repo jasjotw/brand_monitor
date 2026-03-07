@@ -78,8 +78,8 @@ export default function SignupPage() {
       <div className="pointer-events-none absolute bottom-0 left-0 h-80 w-80 -translate-x-1/4 rounded-full bg-chart-3/10 blur-3xl" />
 
       <div className="relative mx-auto flex min-h-screen max-w-6xl items-stretch px-6 py-12 lg:py-16">
-        <div className="grid w-full items-center gap-10 lg:grid-cols-[0.95fr_1.05fr]">
-          <div className="card-hover w-full rounded-2xl border border-border bg-card/90 p-6 shadow-sm backdrop-blur sm:p-8">
+        <div className="grid w-full items-center gap-10 lg:grid-cols-[1.05fr_0.95fr]">
+          <div className="card-hover w-full rounded-2xl border border-border bg-card/90 p-6 shadow-sm backdrop-blur sm:p-8 lg:order-2">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-semibold">Create your account</h2>
@@ -211,7 +211,7 @@ export default function SignupPage() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-6">
+          <div className="flex flex-col gap-6 lg:order-1">
             <div className="inline-flex w-fit items-center gap-2 rounded-full border border-border/60 bg-card px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
               AEO Visibility
             </div>

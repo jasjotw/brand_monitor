@@ -84,13 +84,6 @@ export default function LoginPage() {
                 </div>
               ))}
             </div>
-            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-              <Sparkles className="h-4 w-4 text-primary" />
-              New here?{" "}
-              <Link className="font-semibold text-foreground hover:text-primary" href="/signup">
-                Create an account
-              </Link>
-            </div>
           </div>
 
           <div className="card-hover w-full rounded-2xl border border-border bg-card/90 p-6 shadow-sm backdrop-blur sm:p-8">
@@ -143,6 +136,14 @@ export default function LoginPage() {
                 {loading ? "Signing in..." : "Continue"}
                 <ArrowRight className="h-4 w-4" />
               </button>
+
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <Sparkles className="h-4 w-4 text-primary" />
+                New here?{" "}
+                <Link className="font-semibold text-foreground hover:text-primary" href="/signup">
+                  Create an account
+                </Link>
+              </div>
             </form>
 
             {error && (

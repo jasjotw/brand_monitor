@@ -1,30 +1,181 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect } from "react";
 import { 
   X, 
   Sparkles, 
-  ChevronRight, 
-  PenTool, 
-  Code, 
-  FileText, 
+  ChevronRight,
+  Copy,
+  Download,
+  Save, 
   Cpu, 
-  Bookmark, 
   Type, 
-  BarChart3, 
-  Info,
   Zap,
   CheckCircle2,
   AlertCircle,
-  Network,
-  MessageSquare,
   User,
   Bot,
-  Terminal,
-  Search
+  Terminal
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { getAuthToken } from "@/lib/auth";
+
+interface StudioCompetitor {
+  name: string;
+  url?: string;
+  description?: string;
+}
+
+interface StudioBrandProfile {
+  id?: string | number;
+  name?: string;
+  url?: string;
+  description?: string | null;
+  industry?: string | null;
+  location?: string | null;
+  tone?: string | null;
+  competitors?: unknown;
+  scrapedData?: {
+    description?: string;
+    competitorDetails?: Array<{ name?: string; url?: string; description?: string }>;
+  } | null;
+}
+
+interface GenerateArticlePayload {
+  topic: string;
+  user_id: string;
+  brand_id: string;
+  brand_url: string;
+  brand_name: string;
+  brand_description: string;
+  brand_industry: string;
+  brand_location: string;
+  brand_tone: string;
+  follow_competitor_content: boolean;
+  competitors: StudioCompetitor[];
+  seo_requirements: {
+    target_word_count: number;
+    primary_keyword: string;
+    secondary_keywords: string[];
+    internal_links: string[];
+    external_links: string[];
+    include_faq: boolean;
+    include_statistics: boolean;
+    include_examples: boolean;
+  };
+  audience: {
+    primary: string;
+    secondary: string;
+    experience_level: string;
+  };
+  content_format: {
+    include_tables: boolean;
+    include_step_by_step_guide: boolean;
+    include_case_study: boolean;
+  };
+}
+
+function parseLines(input: string): string[] {
+  return input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseCompetitors(value: unknown, fallbackDetails?: StudioBrandProfile["scrapedData"]): StudioCompetitor[] {
+  const source = Array.isArray(value) ? value : [];
+  const dedupe = new Set<string>();
+  const result: StudioCompetitor[] = [];
+
+  source.forEach((entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      const name = entry.trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (dedupe.has(key)) return;
+      dedupe.add(key);
+      result.push({ name });
+      return;
+    }
+    if (typeof entry === "object") {
+      const row = entry as { name?: unknown; url?: unknown; description?: unknown };
+      const name = typeof row.name === "string" ? row.name.trim() : "";
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (dedupe.has(key)) return;
+      dedupe.add(key);
+      result.push({
+        name,
+        url: typeof row.url === "string" && row.url.trim() ? row.url.trim() : undefined,
+        description:
+          typeof row.description === "string" && row.description.trim() ? row.description.trim() : undefined,
+      });
+    }
+  });
+
+  if (result.length > 0) return result;
+
+  const details = Array.isArray(fallbackDetails?.competitorDetails) ? fallbackDetails.competitorDetails : [];
+  details.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const name = typeof entry.name === "string" ? entry.name.trim() : "";
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (dedupe.has(key)) return;
+    dedupe.add(key);
+    result.push({
+      name,
+      url: typeof entry.url === "string" && entry.url.trim() ? entry.url.trim() : undefined,
+      description:
+        typeof entry.description === "string" && entry.description.trim() ? entry.description.trim() : undefined,
+    });
+  });
+
+  return result;
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function toSimpleMarkdownHtml(markdown: string): string {
+  let html = escapeHtml(markdown);
+  html = html.replace(/^### (.*)$/gm, "<h3>$1</h3>");
+  html = html.replace(/^## (.*)$/gm, "<h2>$1</h2>");
+  html = html.replace(/^# (.*)$/gm, "<h1>$1</h1>");
+  html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+  html = html.replace(/\*(.*?)\*/g, "<em>$1</em>");
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  html = html.replace(/(^|\s)(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noreferrer">$2</a>');
+  html = html.replace(/\n\n+/g, "</p><p>");
+  html = html.replace(/\n/g, "<br/>");
+  return `<p>${html}</p>`;
+}
+
+function embedLinksInArticle(article: string, internalLinks: string[], externalLinks: string[]): string {
+  let output = article.trim();
+  const missingInternal = internalLinks.filter((link) => !output.includes(link));
+  const missingExternal = externalLinks.filter((link) => !output.includes(link));
+  if (missingInternal.length === 0 && missingExternal.length === 0) return output;
+
+  const sections: string[] = [];
+  if (missingInternal.length > 0) {
+    sections.push(
+      "### Internal Links\n" + missingInternal.map((link) => `- [${link}](${link})`).join("\n")
+    );
+  }
+  if (missingExternal.length > 0) {
+    sections.push(
+      "### External References\n" + missingExternal.map((link) => `- [${link}](${link})`).join("\n")
+    );
+  }
+  return `${output}\n\n## Related Links\n${sections.join("\n\n")}`;
+}
 
 // --- 1. Doodle Background Pattern (DENSE & RANDOM) ---
 function DoodleBackground() {
@@ -246,17 +397,98 @@ function SimulationResult({ topic, content, onClose }: { topic: string; content:
   );
 }
 
-// --- 4. AI Intelligence Panel (The Judge) ---
-function AIJudgePanel({ content, onSimulate }: { content: string; onSimulate: () => void }) {
-  const [citationScore, setCitationScore] = useState(64);
-  
-  useEffect(() => {
-    const score = Math.min(40 + Math.floor(content.length / 20), 98);
-    setCitationScore(score);
-  }, [content]);
+interface AIJudgePanelProps {
+  dbLoading: boolean;
+  userId: string;
+  brandName: string;
+  brandDescription: string;
+  hasBackendResponse: boolean;
+  citationScore: number;
+  brandTone: string;
+  setBrandTone: (value: string) => void;
+  targetWordCount: string;
+  setTargetWordCount: (value: string) => void;
+  primaryKeyword: string;
+  setPrimaryKeyword: (value: string) => void;
+  secondaryKeywords: string;
+  setSecondaryKeywords: (value: string) => void;
+  internalLinks: string;
+  setInternalLinks: (value: string) => void;
+  externalLinks: string;
+  setExternalLinks: (value: string) => void;
+  audiencePrimary: string;
+  setAudiencePrimary: (value: string) => void;
+  audienceSecondary: string;
+  setAudienceSecondary: (value: string) => void;
+  audienceLevel: string;
+  setAudienceLevel: (value: string) => void;
+  includeFaq: boolean;
+  setIncludeFaq: (value: boolean) => void;
+  includeStatistics: boolean;
+  setIncludeStatistics: (value: boolean) => void;
+  includeExamples: boolean;
+  setIncludeExamples: (value: boolean) => void;
+  includeTables: boolean;
+  setIncludeTables: (value: boolean) => void;
+  includeStepByStepGuide: boolean;
+  setIncludeStepByStepGuide: (value: boolean) => void;
+  includeCaseStudy: boolean;
+  setIncludeCaseStudy: (value: boolean) => void;
+  followCompetitorContent: boolean;
+  setFollowCompetitorContent: (value: boolean) => void;
+  onGenerateArticle: () => void;
+  generating: boolean;
+  generateError: string | null;
+  generateSuccess: string | null;
+}
 
+// --- 4. AI Intelligence Panel (The Judge) ---
+function AIJudgePanel({
+  dbLoading,
+  userId,
+  brandName,
+  brandDescription,
+  hasBackendResponse,
+  citationScore,
+  brandTone,
+  setBrandTone,
+  targetWordCount,
+  setTargetWordCount,
+  primaryKeyword,
+  setPrimaryKeyword,
+  secondaryKeywords,
+  setSecondaryKeywords,
+  internalLinks,
+  setInternalLinks,
+  externalLinks,
+  setExternalLinks,
+  audiencePrimary,
+  setAudiencePrimary,
+  audienceSecondary,
+  setAudienceSecondary,
+  audienceLevel,
+  setAudienceLevel,
+  includeFaq,
+  setIncludeFaq,
+  includeStatistics,
+  setIncludeStatistics,
+  includeExamples,
+  setIncludeExamples,
+  includeTables,
+  setIncludeTables,
+  includeStepByStepGuide,
+  setIncludeStepByStepGuide,
+  includeCaseStudy,
+  setIncludeCaseStudy,
+  followCompetitorContent,
+  setFollowCompetitorContent,
+  onGenerateArticle,
+  generating,
+  generateError,
+  generateSuccess,
+}: AIJudgePanelProps) {
   return (
-    <div className="flex h-full w-[380px] flex-col border-l border-border bg-card/80 backdrop-blur-md z-10">
+    <div className="flex h-full w-full lg:w-1/2 flex-col border-l border-border bg-card/80 backdrop-blur-md z-10">
       <div className="p-6 border-b border-border">
         <div className="flex items-center gap-2 mb-1">
           <Sparkles size={16} className="text-primary fill-primary/20" />
@@ -266,66 +498,190 @@ function AIJudgePanel({ content, onSimulate }: { content: string; onSimulate: ()
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-8">
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-foreground">Citation Probability</span>
-            <span className="text-xs font-mono text-primary font-bold">{citationScore}%</span>
+        {hasBackendResponse ? (
+          <>
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-foreground">Citation Probability</span>
+                <span className="text-xs font-mono text-primary font-bold">{citationScore}%</span>
+              </div>
+              <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
+                <motion.div
+                  animate={{ width: `${citationScore}%` }}
+                  className="h-full bg-primary"
+                />
+              </div>
+              <p className="text-[11px] leading-relaxed text-sidebar-muted">
+                Estimated probability based on generated article quality signals.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              <h4 className="text-[11px] font-bold uppercase text-foreground/50 tracking-wider">Recommendations</h4>
+
+              <div className="space-y-3">
+                <div className="group flex gap-3 p-3 rounded-xl border border-border bg-background hover:border-primary/30 transition-all cursor-pointer">
+                  <Zap size={14} className="text-warning mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[12px] font-bold text-foreground">Improve Keyword Coverage</p>
+                    <p className="text-[11px] text-sidebar-muted mt-1">Ensure the primary keyword appears in heading and introduction.</p>
+                  </div>
+                </div>
+
+                <div className="group flex gap-3 p-3 rounded-xl border border-border bg-background hover:border-primary/30 transition-all cursor-pointer">
+                  <CheckCircle2 size={14} className="text-success mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[12px] font-bold text-foreground">Structure Confirmed</p>
+                    <p className="text-[11px] text-sidebar-muted mt-1">Generated markdown is structured for readable AI extraction.</p>
+                  </div>
+                </div>
+
+                <div className="group flex gap-3 p-3 rounded-xl border border-dashed border-border bg-secondary/20 hover:border-primary/30 transition-all cursor-pointer">
+                  <AlertCircle size={14} className="text-destructive mt-0.5 shrink-0" />
+                  <div>
+                    <p className="text-[12px] font-bold text-foreground">Add More Proof Points</p>
+                    <p className="text-[11px] text-sidebar-muted mt-1">Include statistics or source references to strengthen trust signals.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-xl border border-dashed border-border bg-background p-4 text-xs text-muted-foreground">
+            Citation probability and recommendations will appear after backend returns the generated article.
           </div>
-          <div className="h-2 w-full bg-secondary rounded-full overflow-hidden">
-            <motion.div 
-              animate={{ width: `${citationScore}%` }}
-              className="h-full bg-primary"
-            />
-          </div>
-          <p className="text-[11px] leading-relaxed text-sidebar-muted">
-            Probability that an LLM (ChatGPT/Gemini) will use this content as a primary source for related queries.
+        )}
+
+        <div className="space-y-3 rounded-xl border border-border bg-background p-3">
+          <h4 className="text-[11px] font-bold uppercase tracking-wider text-foreground/50">Generate Inputs</h4>
+          <p className="text-[10px] text-muted-foreground">
+            {dbLoading ? "Loading brand data..." : `User: ${userId || "N/A"} | Brand: ${brandName || "N/A"}`}
           </p>
-        </div>
+          {brandDescription ? (
+            <p className="line-clamp-3 text-[10px] text-muted-foreground">{brandDescription}</p>
+          ) : null}
 
-        <div className="space-y-4">
-          <h4 className="text-[11px] font-bold uppercase text-foreground/50 tracking-wider">Recommendations</h4>
-          
-          <div className="space-y-3">
-            <div className="group flex gap-3 p-3 rounded-xl border border-border bg-background hover:border-primary/30 transition-all cursor-pointer">
-              <Zap size={14} className="text-warning mt-0.5 shrink-0" />
-              <div>
-                <p className="text-[12px] font-bold text-foreground">Inject Entity Data</p>
-                <p className="text-[11px] text-sidebar-muted mt-1">Perplexity values specific pricing. Add a "Starter Plan" mention to increase relevance.</p>
-              </div>
-            </div>
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            Brand tone
+            <input
+              value={brandTone}
+              onChange={(e) => setBrandTone(e.target.value)}
+              className="h-8 rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
 
-            <div className="group flex gap-3 p-3 rounded-xl border border-border bg-background hover:border-primary/30 transition-all cursor-pointer">
-              <CheckCircle2 size={14} className="text-success mt-0.5 shrink-0" />
-              <div>
-                <p className="text-[12px] font-bold text-foreground">Structure Confirmed</p>
-                <p className="text-[11px] text-sidebar-muted mt-1">H2 headers are formatted as direct answers. Perfect for GPT-4o citation.</p>
-              </div>
-            </div>
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            Target word count
+            <input
+              value={targetWordCount}
+              onChange={(e) => setTargetWordCount(e.target.value)}
+              className="h-8 rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
 
-            <div className="group flex gap-3 p-3 rounded-xl border border-dashed border-border bg-secondary/20 hover:border-primary/30 transition-all cursor-pointer">
-              <AlertCircle size={14} className="text-destructive mt-0.5 shrink-0" />
-              <div>
-                <p className="text-[12px] font-bold text-foreground">Missing Citation Source</p>
-                <p className="text-[11px] text-sidebar-muted mt-1">Reference a study or expert to boost "Trust Score" for Gemini.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            Primary keyword
+            <input
+              value={primaryKeyword}
+              onChange={(e) => setPrimaryKeyword(e.target.value)}
+              className="h-8 rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
 
-      <div className="p-6 border-t border-border bg-secondary/10">
-        <button 
-          onClick={onSimulate}
-          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-foreground text-background text-sm font-bold hover:scale-[1.02] active:scale-[0.98] transition-all group"
-        >
-          <motion.div
-            animate={{ rotate: [0, 10, -10, 0] }}
-            transition={{ duration: 2, repeat: Infinity }}
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            Secondary keywords (one per line)
+            <textarea
+              value={secondaryKeywords}
+              onChange={(e) => setSecondaryKeywords(e.target.value)}
+              rows={3}
+              className="rounded-md border border-border bg-card p-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            Internal links (one per line)
+            <textarea
+              value={internalLinks}
+              onChange={(e) => setInternalLinks(e.target.value)}
+              rows={2}
+              className="rounded-md border border-border bg-card p-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            External links (one per line)
+            <textarea
+              value={externalLinks}
+              onChange={(e) => setExternalLinks(e.target.value)}
+              rows={2}
+              className="rounded-md border border-border bg-card p-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            Audience primary
+            <input
+              value={audiencePrimary}
+              onChange={(e) => setAudiencePrimary(e.target.value)}
+              className="h-8 rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            Audience secondary
+            <input
+              value={audienceSecondary}
+              onChange={(e) => setAudienceSecondary(e.target.value)}
+              className="h-8 rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-[11px] font-medium text-foreground">
+            Audience experience level
+            <input
+              value={audienceLevel}
+              onChange={(e) => setAudienceLevel(e.target.value)}
+              className="h-8 rounded-md border border-border bg-card px-2 text-[11px] outline-none focus:border-primary/40"
+            />
+          </label>
+
+          <label className="flex items-center gap-2 text-[11px] text-foreground">
+            <input type="checkbox" checked={followCompetitorContent} onChange={(e) => setFollowCompetitorContent(e.target.checked)} />
+            follow_competitor_content
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-foreground">
+            <input type="checkbox" checked={includeFaq} onChange={(e) => setIncludeFaq(e.target.checked)} />
+            include_faq
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-foreground">
+            <input type="checkbox" checked={includeStatistics} onChange={(e) => setIncludeStatistics(e.target.checked)} />
+            include_statistics
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-foreground">
+            <input type="checkbox" checked={includeExamples} onChange={(e) => setIncludeExamples(e.target.checked)} />
+            include_examples
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-foreground">
+            <input type="checkbox" checked={includeTables} onChange={(e) => setIncludeTables(e.target.checked)} />
+            include_tables
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-foreground">
+            <input type="checkbox" checked={includeStepByStepGuide} onChange={(e) => setIncludeStepByStepGuide(e.target.checked)} />
+            include_step_by_step_guide
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-foreground">
+            <input type="checkbox" checked={includeCaseStudy} onChange={(e) => setIncludeCaseStudy(e.target.checked)} />
+            include_case_study
+          </label>
+
+          <button
+            onClick={onGenerateArticle}
+            disabled={generating}
+            className="w-full rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
           >
-            <Zap size={16} className="text-primary fill-primary" />
-          </motion.div>
-          Simulate AI Response
-        </button>
+            {generating ? "Getting article..." : "Get Article"}
+          </button>
+          {generateError ? <p className="text-[11px] text-destructive">{generateError}</p> : null}
+          {generateSuccess ? <p className="text-[11px] text-success">{generateSuccess}</p> : null}
+        </div>
       </div>
     </div>
   );
@@ -335,23 +691,231 @@ function AIJudgePanel({ content, onSimulate }: { content: string; onSimulate: ()
 export function AEOStudio({ isOpen, onClose, initialTopic = "" }: { isOpen: boolean; onClose: () => void; initialTopic?: string }) {
   const [content, setContent] = useState("");
   const [title, setTitle] = useState(initialTopic);
-  
-  // Simulation States
-  const [simState, setSimState] = useState<"idle" | "processing" | "result">("idle");
-  const [simStep, setSimStep] = useState("");
+  const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
+  const [draftMessage, setDraftMessage] = useState<string | null>(null);
+  const [dbLoading, setDbLoading] = useState(false);
+  const [userId, setUserId] = useState("");
+  const [brandProfile, setBrandProfile] = useState<StudioBrandProfile | null>(null);
+  const [competitors, setCompetitors] = useState<StudioCompetitor[]>([]);
+  const [brandTone, setBrandTone] = useState("");
+  const [targetWordCount, setTargetWordCount] = useState("1500");
+  const [primaryKeyword, setPrimaryKeyword] = useState("");
+  const [secondaryKeywords, setSecondaryKeywords] = useState("");
+  const [internalLinks, setInternalLinks] = useState("");
+  const [externalLinks, setExternalLinks] = useState("");
+  const [audiencePrimary, setAudiencePrimary] = useState("");
+  const [audienceSecondary, setAudienceSecondary] = useState("");
+  const [audienceLevel, setAudienceLevel] = useState("General audience");
+  const [includeFaq, setIncludeFaq] = useState(true);
+  const [includeStatistics, setIncludeStatistics] = useState(true);
+  const [includeExamples, setIncludeExamples] = useState(true);
+  const [includeTables, setIncludeTables] = useState(true);
+  const [includeStepByStepGuide, setIncludeStepByStepGuide] = useState(false);
+  const [includeCaseStudy, setIncludeCaseStudy] = useState(true);
+  const [followCompetitorContent, setFollowCompetitorContent] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
+  const [generateSuccess, setGenerateSuccess] = useState<string | null>(null);
+  const hasBackendResponse = content.trim().length > 0;
+  const citationScore = Math.min(40 + Math.floor(content.length / 20), 98);
 
-  const runSimulation = () => {
-    setSimState("processing");
-    
-    // Staggered simulation steps
-    setTimeout(() => setSimStep("Scanning Content Semantics..."), 0);
-    setTimeout(() => setSimStep("Extracting Named Entities..."), 1500);
-    setTimeout(() => setSimStep("Simulating LLM Attention Weights..."), 3000);
-    setTimeout(() => setSimStep("Synthesizing Final Response..."), 4500);
-    
-    setTimeout(() => {
-      setSimState("result");
-    }, 6000);
+  useEffect(() => {
+    setTitle(initialTopic);
+  }, [initialTopic]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const token = getAuthToken();
+    if (!token) return;
+
+    let cancelled = false;
+
+    const loadDefaults = async () => {
+      try {
+        setDbLoading(true);
+        const baseUrl = process.env.NEXT_PUBLIC_BRAND_MONITOR_URL || "http://localhost:4001";
+
+        const [meRes, profileRes, audienceRes] = await Promise.all([
+          fetch(`${baseUrl}/api/auth/me`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${baseUrl}/api/brand-monitor/brand-profile/current`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+          fetch(`${baseUrl}/api/brand-monitor/audience/current`, {
+            headers: { Authorization: `Bearer ${token}` },
+          }),
+        ]);
+
+        const meData = await meRes.json().catch(() => ({}));
+        const profileData = await profileRes.json().catch(() => ({}));
+        const audienceData = await audienceRes.json().catch(() => ({}));
+
+        if (cancelled) return;
+
+        const nextUserId =
+          meData?.user?.id ||
+          meData?.user?._id ||
+          meData?.id ||
+          "";
+        setUserId(String(nextUserId || ""));
+
+        const brand = (profileData?.brand || null) as StudioBrandProfile | null;
+        setBrandProfile(brand);
+        if (brand) {
+          const extractedCompetitors = parseCompetitors(brand.competitors, brand.scrapedData || undefined);
+          setCompetitors(extractedCompetitors);
+          if (!primaryKeyword && brand.name) {
+            setPrimaryKeyword(String(brand.name).trim().toLowerCase());
+          }
+          if (!brandTone) {
+            setBrandTone(typeof brand.tone === "string" && brand.tone.trim() ? brand.tone.trim() : "");
+          }
+        }
+
+        const audience = audienceData?.audience;
+        if (audience && typeof audience === "object") {
+          if (typeof audience.primary === "string" && audience.primary.trim()) {
+            setAudiencePrimary(audience.primary.trim());
+          }
+          if (typeof audience.secondary === "string" && audience.secondary.trim()) {
+            setAudienceSecondary(audience.secondary.trim());
+          }
+          if (typeof audience.experienceLevel === "string" && audience.experienceLevel.trim()) {
+            setAudienceLevel(audience.experienceLevel.trim());
+          }
+        }
+      } catch (err) {
+        console.warn("[AEOStudio] Failed to prefill studio inputs:", err);
+      } finally {
+        if (!cancelled) setDbLoading(false);
+      }
+    };
+
+    loadDefaults();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
+
+  const handleGenerateArticle = async () => {
+    try {
+      if (!title.trim()) {
+        setGenerateError("Topic is required.");
+        return;
+      }
+
+      const brand = brandProfile || {};
+      const pythonServiceBaseUrl = process.env.NEXT_PUBLIC_PYTHON_SERVICE_BASE_URL || "http://localhost:8001";
+      const payload: GenerateArticlePayload = {
+        topic: title.trim(),
+        user_id: userId,
+        brand_id: String(brand.id ?? ""),
+        brand_url: String(brand.url ?? ""),
+        brand_name: String(brand.name ?? ""),
+        brand_description: String(brand.description ?? brand.scrapedData?.description ?? ""),
+        brand_industry: String(brand.industry ?? ""),
+        brand_location: String(brand.location ?? ""),
+        brand_tone: brandTone.trim(),
+        follow_competitor_content: followCompetitorContent,
+        competitors: competitors.map((row) => ({
+          name: row.name,
+          url: row.url,
+          description: row.description,
+        })),
+        seo_requirements: {
+          target_word_count: Number(targetWordCount) || 1500,
+          primary_keyword: primaryKeyword.trim(),
+          secondary_keywords: parseLines(secondaryKeywords),
+          internal_links: parseLines(internalLinks),
+          external_links: parseLines(externalLinks),
+          include_faq: includeFaq,
+          include_statistics: includeStatistics,
+          include_examples: includeExamples,
+        },
+        audience: {
+          primary: audiencePrimary.trim(),
+          secondary: audienceSecondary.trim(),
+          experience_level: audienceLevel.trim() || "General audience",
+        },
+        content_format: {
+          include_tables: includeTables,
+          include_step_by_step_guide: includeStepByStepGuide,
+          include_case_study: includeCaseStudy,
+        },
+      };
+
+      setGenerating(true);
+      setGenerateError(null);
+      setGenerateSuccess(null);
+
+      const response = await fetch(`${pythonServiceBaseUrl}/content-studio/generate-article`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error?.message || data?.error || "Failed to generate article.");
+      }
+
+      const generatedArticle =
+        data?.article ||
+        data?.content ||
+        data?.generated_article ||
+        data?.result?.article ||
+        "";
+      if (typeof generatedArticle === "string" && generatedArticle.trim()) {
+        const embedded = embedLinksInArticle(generatedArticle, parseLines(internalLinks), parseLines(externalLinks));
+        setContent(embedded);
+        setEditorMode("edit");
+      }
+      setGenerateSuccess("Article generated successfully from python service.");
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : "Failed to generate article.");
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleSaveDraft = () => {
+    const key = `content_studio_draft_${brandProfile?.id || "default"}`;
+    const payload = {
+      topic: title,
+      articleMarkdown: content,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(key, JSON.stringify(payload));
+    setDraftMessage("Draft saved.");
+    window.setTimeout(() => setDraftMessage(null), 2000);
+  };
+
+  const handleCopyArticle = async () => {
+    if (!content.trim()) return;
+    try {
+      await navigator.clipboard.writeText(content);
+      setDraftMessage("Article copied.");
+      window.setTimeout(() => setDraftMessage(null), 2000);
+    } catch {
+      setDraftMessage("Copy failed.");
+      window.setTimeout(() => setDraftMessage(null), 2000);
+    }
+  };
+
+  const handleDownloadArticle = () => {
+    if (!content.trim()) return;
+    const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${title.trim().replace(/\s+/g, "-").toLowerCase() || "generated-article"}.md`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -365,18 +929,6 @@ export function AEOStudio({ isOpen, onClose, initialTopic = "" }: { isOpen: bool
           className="fixed inset-0 z-[200] flex flex-col bg-background"
         >
           <DoodleBackground />
-
-          {/* Simulation Layers */}
-          <AnimatePresence>
-            {simState === "processing" && <SimulationOverlay step={simStep} />}
-            {simState === "result" && (
-              <SimulationResult 
-                topic={title} 
-                content={content} 
-                onClose={() => setSimState("idle")} 
-              />
-            )}
-          </AnimatePresence>
 
           {/* Studio Top Bar */}
           <header className="relative z-10 flex h-16 items-center justify-between border-b border-border bg-card/50 backdrop-blur-md px-6">
@@ -395,54 +947,146 @@ export function AEOStudio({ isOpen, onClose, initialTopic = "" }: { isOpen: bool
             </div>
 
             <div className="flex items-center gap-3">
-              <button className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold text-sidebar-muted hover:bg-secondary transition-all">
+              <button
+                onClick={handleSaveDraft}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold text-sidebar-muted hover:bg-secondary transition-all"
+              >
+                <Save size={13} />
                 Save Draft
               </button>
-              <button className="flex items-center gap-2 px-5 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-bold shadow-lg shadow-primary/20 hover:scale-105 active:scale-95 transition-all">
-                Push to Live
-                <ChevronRight size={14} />
+              <button
+                onClick={handleCopyArticle}
+                disabled={!hasBackendResponse}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold text-sidebar-muted hover:bg-secondary transition-all disabled:opacity-50"
+              >
+                <Copy size={13} />
+                Copy
+              </button>
+              <button
+                onClick={handleDownloadArticle}
+                disabled={!hasBackendResponse}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold text-sidebar-muted hover:bg-secondary transition-all disabled:opacity-50"
+              >
+                <Download size={13} />
+                Download
               </button>
             </div>
           </header>
 
-          <div className="relative z-10 flex flex-1 overflow-hidden">
-            {/* Editor Canvas */}
-            <main className="flex-1 overflow-y-auto p-12 lg:p-24">
-              <div className="mx-auto max-w-3xl space-y-8">
+          <div className="relative z-10 flex flex-1 flex-col overflow-hidden lg:flex-row">
+            {/* Topic Input */}
+            <main className="w-full overflow-y-auto border-b border-border p-8 lg:w-1/2 lg:border-b-0 lg:border-r lg:p-10">
+              <div className="mx-auto max-w-xl space-y-6">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Type size={13} />
+                  Topic Input
+                </div>
                 <input 
                   type="text" 
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Article Title..."
-                  className="w-full bg-transparent text-5xl font-extrabold tracking-tight text-foreground outline-none placeholder:text-foreground/10"
+                  placeholder="Write topic for evaluation..."
+                  className="w-full rounded-xl border border-border bg-card p-4 text-lg font-semibold tracking-tight text-foreground outline-none placeholder:text-muted-foreground focus:border-primary/50"
                 />
-                
-                <div className="flex items-center gap-6 border-y border-border/50 py-4">
-                  <div className="flex items-center gap-2 text-xs font-medium text-sidebar-muted hover:text-primary transition-colors cursor-pointer">
-                    <Type size={14} />
-                    <span>Body Text</span>
+                <p className="text-xs text-muted-foreground">
+                  Enter topic and generate from backend. The response appears below as editable markdown.
+                </p>
+                {draftMessage ? <p className="text-xs font-medium text-primary">{draftMessage}</p> : null}
+
+                <div className="rounded-xl border border-border bg-card">
+                  <div className="flex items-center justify-between border-b border-border p-2">
+                    <span className="text-[11px] font-semibold text-muted-foreground">Article Markdown</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setEditorMode("edit")}
+                        className={cn(
+                          "rounded-md px-2 py-1 text-[10px] font-semibold",
+                          editorMode === "edit" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary"
+                        )}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => setEditorMode("preview")}
+                        className={cn(
+                          "rounded-md px-2 py-1 text-[10px] font-semibold",
+                          editorMode === "preview" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary"
+                        )}
+                      >
+                        Preview
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 text-xs font-medium text-sidebar-muted hover:text-primary transition-colors cursor-pointer">
-                    <PenTool size={14} />
-                    <span>Normal</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs font-medium text-sidebar-muted hover:text-primary transition-colors cursor-pointer">
-                    <Code size={14} />
-                    <span>Markdown</span>
+                  <div className="p-3">
+                    {editorMode === "edit" ? (
+                      <textarea
+                        value={content}
+                        onChange={(e) => setContent(e.target.value)}
+                        placeholder="Generated markdown article will appear here..."
+                        className="min-h-[320px] w-full resize-y rounded-lg border border-border bg-background p-3 text-xs text-foreground outline-none focus:border-primary/40"
+                      />
+                    ) : (
+                      <div
+                        className="prose prose-sm max-w-none min-h-[320px] rounded-lg border border-border bg-background p-3 text-xs text-foreground"
+                        dangerouslySetInnerHTML={{ __html: toSimpleMarkdownHtml(content || "No article generated yet.") }}
+                      />
+                    )}
                   </div>
                 </div>
-
-                <textarea
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  placeholder="Start engineering content that AI loves to cite..."
-                  className="min-h-[500px] w-full resize-none bg-transparent text-[18px] leading-relaxed text-sidebar-muted outline-none placeholder:text-foreground/5"
-                />
               </div>
             </main>
 
             {/* AI Intelligence Panel */}
-            <AIJudgePanel content={content} onSimulate={runSimulation} />
+            <AIJudgePanel
+              dbLoading={dbLoading}
+              userId={userId}
+              brandName={brandProfile?.name || ""}
+              brandDescription={
+                String(
+                  brandProfile?.description ||
+                  brandProfile?.scrapedData?.description ||
+                  ""
+                )
+              }
+              hasBackendResponse={hasBackendResponse}
+              citationScore={citationScore}
+              brandTone={brandTone}
+              setBrandTone={setBrandTone}
+              targetWordCount={targetWordCount}
+              setTargetWordCount={setTargetWordCount}
+              primaryKeyword={primaryKeyword}
+              setPrimaryKeyword={setPrimaryKeyword}
+              secondaryKeywords={secondaryKeywords}
+              setSecondaryKeywords={setSecondaryKeywords}
+              internalLinks={internalLinks}
+              setInternalLinks={setInternalLinks}
+              externalLinks={externalLinks}
+              setExternalLinks={setExternalLinks}
+              audiencePrimary={audiencePrimary}
+              setAudiencePrimary={setAudiencePrimary}
+              audienceSecondary={audienceSecondary}
+              setAudienceSecondary={setAudienceSecondary}
+              audienceLevel={audienceLevel}
+              setAudienceLevel={setAudienceLevel}
+              includeFaq={includeFaq}
+              setIncludeFaq={setIncludeFaq}
+              includeStatistics={includeStatistics}
+              setIncludeStatistics={setIncludeStatistics}
+              includeExamples={includeExamples}
+              setIncludeExamples={setIncludeExamples}
+              includeTables={includeTables}
+              setIncludeTables={setIncludeTables}
+              includeStepByStepGuide={includeStepByStepGuide}
+              setIncludeStepByStepGuide={setIncludeStepByStepGuide}
+              includeCaseStudy={includeCaseStudy}
+              setIncludeCaseStudy={setIncludeCaseStudy}
+              followCompetitorContent={followCompetitorContent}
+              setFollowCompetitorContent={setFollowCompetitorContent}
+              onGenerateArticle={handleGenerateArticle}
+              generating={generating}
+              generateError={generateError}
+              generateSuccess={generateSuccess}
+            />
           </div>
         </motion.div>
       )}
