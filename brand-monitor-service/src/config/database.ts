@@ -9,8 +9,11 @@ import { Pool } from 'pg';
 import * as schema from '../db/schema';
 import { env } from './env';
 
+const requiresSslFromUrl = /sslmode=require/i.test(env.DATABASE_URL);
+
 const pool = new Pool({
     connectionString: env.DATABASE_URL,
+    ssl: env.isProd() || requiresSslFromUrl ? { rejectUnauthorized: false } : false,
     max: env.DB_POOL_MAX,
     idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
     connectionTimeoutMillis: env.DB_POOL_CONN_TIMEOUT_MS,

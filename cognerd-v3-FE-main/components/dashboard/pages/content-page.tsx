@@ -376,9 +376,9 @@ export function ContentPage() {
               </p>
             </div>
             <div className="flex flex-col gap-2">
-              {filteredSuggestedTopics.map((t) => (
+              {filteredSuggestedTopics.map((t, idx) => (
                 <button
-                  key={t.name}
+                  key={`${t.name}-${idx}`}
                   onClick={() => { setActiveTopic(t.name); setStudioOpen(true); }}
                   className="group flex items-start gap-3 rounded-lg border border-transparent p-3 text-left transition-all hover:border-border hover:bg-secondary/30"
                 >

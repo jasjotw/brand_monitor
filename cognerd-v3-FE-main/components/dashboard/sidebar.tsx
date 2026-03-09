@@ -101,7 +101,9 @@ function NavItemComponent({
       x: e.clientX - rect.left, 
       y: e.clientY - rect.top 
     }]);
-    
+  };
+
+  const handleClick = () => {
     if (onNavigate) onNavigate(item.id);
   };
 
@@ -133,6 +135,7 @@ function NavItemComponent({
       <Link
         href={item.href}
         onPointerDown={handlePointerDown}
+        onClick={handleClick}
         className={cn(
           "nav-item group/item relative flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[14px] font-medium transition-colors overflow-hidden",
           activeItem === item.id

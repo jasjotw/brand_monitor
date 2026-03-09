@@ -8,6 +8,7 @@ import {
   Filter,
   Plus,
   Search,
+  Download,
 } from "lucide-react";
 import { getAuthToken } from "@/lib/auth";
 import { AnimatedHamburger } from "./animated-hamburger";
@@ -67,9 +68,20 @@ interface TopBarProps {
   onSearchClick?: () => void;
   onFilterClick?: () => void;
   isMenuOpen?: boolean;
+  showDownloadButton?: boolean;
+  onDownloadClick?: () => void;
 }
 
-export function TopBar({ title, subtitle, onMenuClick, onSearchClick, onFilterClick, isMenuOpen = false }: TopBarProps) {
+export function TopBar({
+  title,
+  subtitle,
+  onMenuClick,
+  onSearchClick,
+  onFilterClick,
+  isMenuOpen = false,
+  showDownloadButton = false,
+  onDownloadClick,
+}: TopBarProps) {
   const NEURONS_PER_FULL_RUN = 50;
   const [neurons, setNeurons] = useState<number | null>(null);
   const [neuronsLoading, setNeuronsLoading] = useState(true);
@@ -209,6 +221,18 @@ export function TopBar({ title, subtitle, onMenuClick, onSearchClick, onFilterCl
         >
           <Filter size={16} strokeWidth={1.5} />
         </button>
+
+        {showDownloadButton && (
+          <button
+            onClick={onDownloadClick}
+            data-diagnostics-download-trigger="true"
+            className="nav-item flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"
+            aria-label="Download diagnostics"
+            title="Download diagnostics"
+          >
+            <Download size={16} strokeWidth={1.5} />
+          </button>
+        )}
 
         <div className="hidden h-5 w-px bg-border sm:block" />
 

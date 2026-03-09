@@ -159,6 +159,10 @@ function DashboardLayoutInner({
     setMobileMenuOpen(false);
   };
 
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [pathname]);
+
   // Determine current page config based on the pathname
   const currentKey = Object.keys(pageConfig).find(key => pathname === key) || "/dashboard";
   const currentPage = pageConfig[currentKey] || pageConfig["/dashboard"];
@@ -409,6 +413,12 @@ function DashboardLayoutInner({
           isMenuOpen={mobileMenuOpen}
           onSearchClick={() => setSearchOpen(!searchOpen)}
           onFilterClick={() => setSearchOpen(true)}
+          showDownloadButton={pathname === "/dashboard/diagnostics"}
+          onDownloadClick={() => {
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new Event("diagnostics-download"));
+            }
+          }}
         />
         
         {/* Search Hover Trigger Zone */}

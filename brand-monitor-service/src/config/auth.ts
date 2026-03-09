@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { pool } from './database';
 
 let authInstance: any = null;
 
@@ -9,10 +9,7 @@ export async function getAuth() {
     const { betterAuth } = await eval("import('better-auth')");
 
     authInstance = betterAuth({
-        database: new Pool({
-            connectionString: process.env.DATABASE_URL!,
-            ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-        }),
+        database: pool,
         secret: process.env.BETTER_AUTH_SECRET!,
         baseURL: process.env.WEBAPP_BASE_URL || 'http://localhost:3000',
         emailAndPassword: {
