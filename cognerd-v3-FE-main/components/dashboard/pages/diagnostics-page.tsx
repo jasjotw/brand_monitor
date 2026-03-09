@@ -818,7 +818,7 @@ export function DiagnosticsPage() {
           { name: "Competitor One", url: "https://example1.com" },
           { name: "Competitor Two", url: "https://example2.com" },
         ],
-        max_pages: 15,
+        max_pages: 3,
         faqs_md_path: null,
         brand_id: ctx.brandId || "brand_123",
         user_id: ctx.userId || "user_456",
